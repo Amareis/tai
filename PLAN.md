@@ -4,42 +4,14 @@
 
 ---
 
-## Требования к коду
+## Phase 0: Фундамент ✅
 
-**Строгие clippy-проверки.** Безопасный код по максимуму:
-
-```toml
-# Cargo.toml
-[lints.clippy]
-panic = "forbid"
-indexing_slicing = "forbid"
-unwrap_used = "forbid"
-expect_used = "forbid"
-```
-
-- Никаких `.unwrap()`, `.expect()` — только `?` и явная обработка ошибок
-- Никакой индексации `arr[i]` — только `.get(i)`, итераторы, pattern matching
-- Никаких паник — код должен быть устойчивым к любым входным данным
-- `thiserror` для всех error types
-
-**Зависимости** — добавлять через `cargo add` без явных версий:
-
-```bash
-cargo add kitty-rc ratatui crossterm tokio clap serde serde_json ...
-```
-
-Не прописывать версии вручную в `Cargo.toml` — cargo сам подтянет актуальные. См. полный список в `ARCHITECTURE.md`.
-
----
-
-## Phase 0: Фундамент
-
-- [ ] Cargo workspace, все зависимости, clippy lints
-- [ ] `types.rs` — Window, WindowState, Session, LaunchOpts, TaiCommand, TickTrigger
-- [ ] `backend/mod.rs` — TerminalBackend trait
-- [ ] `config.toml` + загрузка конфигурации
-- [ ] Тесты сериализации типов
-- [ ] Doc-комментарии для всех типов + перенести описание модели данных из `ARCHITECTURE.md`
+- [x] Cargo workspace, все зависимости, clippy lints
+- [x] `types.rs` — Window, WindowState, Session, LaunchOpts, TaiCommand, TickTrigger
+- [x] `backend/mod.rs` — TerminalBackend trait
+- [x] `config.toml` + загрузка конфигурации
+- [x] Тесты сериализации типов (18 тестов)
+- [x] Doc-комментарии для всех типов + перенести описание модели данных из `ARCHITECTURE.md`
 
 ## Phase 1: Kitty Backend — критический путь
 

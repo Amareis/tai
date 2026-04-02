@@ -269,56 +269,11 @@ tai/
 
 ## Модель данных
 
-```rust
-enum WindowState {
-    Active { backend_id: String, pid: u32, title: String },
-    Frozen { content: String, exit_code: i32, captured_at: DateTime<Utc> },
-    Archived { file_path: PathBuf, exit_code: i32 },
-}
+Doc-комментарии и определения типов — в исходниках:
 
-struct Window {
-    id: String,
-    state: WindowState,
-    focused: bool,
-    summary: Option<String>,
-    tags: Vec<String>,
-}
-
-struct Session {
-    id: String,
-    windows: Vec<Window>,
-    mind_path: PathBuf,
-}
-
-enum ParsedSegment {
-    Prose(String),
-    Block { target: String, mode: BlockMode, content: String },
-    TaiCommand(TaiCommand),
-    Invalid { raw_header: String, error: String },
-}
-
-enum BlockMode { Text, Keys }
-
-enum TaiCommand {
-    Launch { title: String, command: String, shell: Option<String> },
-    Close { window_id: String },
-    Focus { window_id: String },
-    Summarize { window_id: String },
-}
-
-enum TickTrigger {
-    WindowExited { window_id: String, exit_code: i32 },
-    UserMessage,
-    IdleTimeout,
-}
-
-struct LaunchOpts {
-    title: String,
-    command: String,
-    shell: Option<String>,
-    hold: bool,  // всегда true
-}
-```
+- [`src/types.rs`](src/types.rs) — `WindowState`, `Window`, `Session`, `LaunchOpts`, `BlockMode`, `TaiCommand`, `ParsedSegment`, `TickTrigger`
+- [`src/backend/mod.rs`](src/backend/mod.rs) — `TerminalBackend` trait, `WindowId`, `WindowInfo`, `BackendError`
+- [`src/config.rs`](src/config.rs) — `Config`, `KernelConfig`, `ModelConfig`, `SessionConfig`, `BackendConfig`
 
 ---
 

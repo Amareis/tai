@@ -1,0 +1,16 @@
+[kernel]
+poll_interval_ms = 500
+idle_timeout_secs = 60
+block_timeout_secs = 30
+
+[model]
+provider = "anthropic"
+model_name = "claude-sonnet-4-20250514"
+max_tokens = 128000
+
+[session]
+dir = "sessions"
+default_name = "default"
+
+[backend]
+backend_type = "kitty"
