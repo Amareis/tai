@@ -4,62 +4,172 @@ use kitty_rc::{
     SendKeyCommand, SendTextCommand, SetWindowTitleCommand,
 };
 use std::path::PathBuf;
+use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tokio::time::Duration;
 
 use crate::types::LaunchOpts;
 
 use super::{BackendError, TerminalBackend, WindowId, WindowInfo};
 
+const KITTY_BINARY: &str = "kitty";
+const SOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const SOCKET_WAIT_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Kitty terminal backend — управляет окнами через Kitty Remote Control protocol.
 ///
-/// Подключается к Kitty через unix socket (`kitty-*.sock`). Каждая операция
-/// захватывает `Mutex` чтобы гарантировать эксклюзивный доступ к `Kitty` client,
-/// т.к. протокол Kitty не поддерживает concurrent requests на одном connection.
+/// Может подключиться к уже запущенному Kitty (`connect`) или запустить свой
+/// собственный инстанс (`spawn`). При `spawn` бэкенд владеет child-процессом
+/// и убивает Kitty при drop.
 ///
 /// Все `launch`-вызовы гарантированно используют `hold = true` — ядро
 /// предотвращает потерю вывода при завершении процесса.
 pub struct KittyBackend {
     client: Mutex<Kitty>,
+    child: Option<Child>,
+    socket_path: PathBuf,
 }
 
 impl KittyBackend {
-    /// Подключиться к Kitty по пути к socket.
+    /// Запустить новый инстанс Kitty и подключиться к нему.
     ///
-    /// Socket обычно находится в `$XDG_RUNTIME_DIR/kitty-<pid>.sock`
-    /// или может быть задан через `--listen-on` при запуске Kitty.
-    pub async fn connect(socket_path: PathBuf) -> Result<Self, BackendError> {
-        let builder = KittyBuilder::new()
-            .socket_path(&socket_path)
-            .timeout(std::time::Duration::from_secs(10));
+    /// Kitty запускается с `allow_remote_control=yes` и socket-ом по заданному пути.
+    /// Если `socket_path` — `None`, генерируется путь в temp-директории.
+    ///
+    /// Метод ждёт появления socket-файла (до `SOCKET_CONNECT_TIMEOUT`).
+    pub async fn spawn(socket_path: Option<PathBuf>) -> Result<Self, BackendError> {
+        let socket_path = socket_path.unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("tai-kitty-{}.sock", uuid::Uuid::new_v4()))
+        });
 
-        let client = builder.connect().await.map_err(|e| {
-            BackendError::Communication(format!("failed to connect to kitty socket {:?}: {}", socket_path, e))
-        })?;
+        let child = Command::new(KITTY_BINARY)
+            .arg("-o")
+            .arg("allow_remote_control=yes")
+            .arg("--listen-on")
+            .arg(format!("unix:{}", socket_path.display()))
+            .spawn()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    BackendError::LaunchFailed(
+                        "kitty not found in PATH. Install kitty terminal emulator.".to_string(),
+                    )
+                } else {
+                    BackendError::LaunchFailed(format!("failed to spawn kitty: {}", e))
+                }
+            })?;
+
+        let client = Self::wait_for_socket(&socket_path).await?;
 
         Ok(Self {
             client: Mutex::new(client),
+            child: Some(child),
+            socket_path,
         })
     }
 
-    /// Подключиться к Kitty по PID процесса.
-    ///
-    /// Socket path вычисляется как `$XDG_RUNTIME_DIR/kitty-<pid>.sock`.
-    pub async fn from_pid(pid: u32) -> Result<Self, BackendError> {
-        let builder = KittyBuilder::new()
-            .with_pid(pid)
-            .timeout(std::time::Duration::from_secs(10));
-
-        let client = builder.connect().await.map_err(|e| {
-            BackendError::Communication(format!("failed to connect to kitty pid {}: {}", pid, e))
-        })?;
-
+    /// Подключиться к уже запущенному Kitty по socket path.
+    pub async fn connect(socket_path: PathBuf) -> Result<Self, BackendError> {
+        let client = Self::connect_to_socket(&socket_path).await?;
         Ok(Self {
             client: Mutex::new(client),
+            child: None,
+            socket_path,
+        })
+    }
+
+    /// Подключиться к уже запущенному Kitty по PID.
+    pub async fn from_pid(pid: u32) -> Result<Self, BackendError> {
+        let builder = KittyBuilder::new()
+            .pid(pid)
+            .timeout(SOCKET_CONNECT_TIMEOUT);
+
+        let client = builder.connect().await.map_err(|e| {
+            BackendError::Communication(format!(
+                "failed to connect to kitty pid {}: {}",
+                pid, e
+            ))
+        })?;
+
+        let socket_path = PathBuf::from(format!("kitty-{}.sock", pid));
+        Ok(Self {
+            client: Mutex::new(client),
+            child: None,
+            socket_path,
+        })
+    }
+
+    /// Путь к socket, через который идёт связь.
+    pub fn socket_path(&self) -> &PathBuf {
+        &self.socket_path
+    }
+
+    /// Владеет ли этот бэкенд Kitty-процессом (был запущен через `spawn`).
+    pub fn owns_process(&self) -> bool {
+        self.child.is_some()
+    }
+
+    async fn wait_for_socket(socket_path: &PathBuf) -> Result<Kitty, BackendError> {
+        let deadline = SOCKET_CONNECT_TIMEOUT;
+        let start = std::time::Instant::now();
+
+        loop {
+            if socket_path.exists() {
+                match Self::connect_to_socket(socket_path).await {
+                    Ok(client) => return Ok(client),
+                    Err(_) if start.elapsed() < deadline => {
+                        tokio::time::sleep(SOCKET_WAIT_INTERVAL).await;
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+
+            if start.elapsed() >= deadline {
+                return Err(BackendError::Communication(format!(
+                    "kitty socket {:?} did not appear within {:?}",
+                    socket_path, deadline
+                )));
+            }
+
+            tokio::time::sleep(SOCKET_WAIT_INTERVAL).await;
+        }
+    }
+
+    async fn connect_to_socket(socket_path: &PathBuf) -> Result<Kitty, BackendError> {
+        let builder = KittyBuilder::new()
+            .socket_path(socket_path)
+            .timeout(SOCKET_CONNECT_TIMEOUT);
+
+        builder.connect().await.map_err(|e| {
+            BackendError::Communication(format!(
+                "failed to connect to kitty socket {:?}: {}",
+                socket_path, e
+            ))
         })
     }
 
     fn match_by_id(window: &WindowId) -> String {
         format!("id:{}", window.0)
+    }
+
+    fn check_kitty_response(response: &kitty_rc::KittyResponse, context: &str) -> Result<(), BackendError> {
+        if !response.ok {
+            let err = response.error.as_deref().unwrap_or("unknown error");
+            return Err(BackendError::Communication(format!(
+                "{}: {}",
+                context, err
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for KittyBackend {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+        }
+        let _ = std::fs::remove_file(&self.socket_path);
     }
 }
 
@@ -81,17 +191,12 @@ impl TerminalBackend for KittyBackend {
             .map_err(|e| BackendError::LaunchFailed(format!("build launch command: {}", e)))?;
 
         let mut client = self.client.lock().await;
-        let response = client.execute(&msg).await.map_err(|e| {
-            BackendError::LaunchFailed(format!("execute launch: {}", e))
-        })?;
+        let response = client
+            .execute(&msg)
+            .await
+            .map_err(|e| BackendError::LaunchFailed(format!("execute launch: {}", e)))?;
 
-        if !response.ok {
-            let err = response
-                .error
-                .as_deref()
-                .unwrap_or("unknown error");
-            return Err(BackendError::LaunchFailed(err.to_string()));
-        }
+        Self::check_kitty_response(&response, "launch")?;
 
         let window_id = response
             .data
@@ -124,15 +229,12 @@ impl TerminalBackend for KittyBackend {
             .map_err(|e| BackendError::SendFailed(format!("build send-text: {}", e)))?;
 
         let mut client = self.client.lock().await;
-        let response = client.execute(&msg).await.map_err(|e| {
-            BackendError::SendFailed(format!("execute send-text: {}", e))
-        })?;
+        let response = client
+            .execute(&msg)
+            .await
+            .map_err(|e| BackendError::SendFailed(format!("execute send-text: {}", e)))?;
 
-        if !response.ok {
-            let err = response.error.as_deref().unwrap_or("unknown error");
-            return Err(BackendError::SendFailed(err.to_string()));
-        }
-
+        Self::check_kitty_response(&response, "send-text")?;
         Ok(())
     }
 
@@ -145,15 +247,12 @@ impl TerminalBackend for KittyBackend {
             .map_err(|e| BackendError::SendFailed(format!("build send-key: {}", e)))?;
 
         let mut client = self.client.lock().await;
-        let response = client.execute(&msg).await.map_err(|e| {
-            BackendError::SendFailed(format!("execute send-key: {}", e))
-        })?;
+        let response = client
+            .execute(&msg)
+            .await
+            .map_err(|e| BackendError::SendFailed(format!("execute send-key: {}", e)))?;
 
-        if !response.ok {
-            let err = response.error.as_deref().unwrap_or("unknown error");
-            return Err(BackendError::SendFailed(err.to_string()));
-        }
-
+        Self::check_kitty_response(&response, "send-key")?;
         Ok(())
     }
 
@@ -168,14 +267,12 @@ impl TerminalBackend for KittyBackend {
             .map_err(|e| BackendError::Communication(format!("build get-text: {}", e)))?;
 
         let mut client = self.client.lock().await;
-        let response = client.execute(&msg).await.map_err(|e| {
-            BackendError::Communication(format!("execute get-text: {}", e))
-        })?;
+        let response = client
+            .execute(&msg)
+            .await
+            .map_err(|e| BackendError::Communication(format!("execute get-text: {}", e)))?;
 
-        if !response.ok {
-            let err = response.error.as_deref().unwrap_or("unknown error");
-            return Err(BackendError::Communication(err.to_string()));
-        }
+        Self::check_kitty_response(&response, "get-text")?;
 
         let text = response
             .data
@@ -184,10 +281,10 @@ impl TerminalBackend for KittyBackend {
                 if let Some(s) = d.as_str() {
                     return Some(s.to_string());
                 }
-                if let Some(obj) = d.as_object() {
-                    if let Some(text_val) = obj.get("text") {
-                        return text_val.as_str().map(|s| s.to_string());
-                    }
+                if let Some(obj) = d.as_object()
+                    && let Some(text_val) = obj.get("text")
+                {
+                    return text_val.as_str().map(|s| s.to_string());
                 }
                 None
             })
@@ -205,15 +302,12 @@ impl TerminalBackend for KittyBackend {
             .map_err(|e| BackendError::Communication(format!("build close-window: {}", e)))?;
 
         let mut client = self.client.lock().await;
-        let response = client.execute(&msg).await.map_err(|e| {
-            BackendError::Communication(format!("execute close-window: {}", e))
-        })?;
+        let response = client
+            .execute(&msg)
+            .await
+            .map_err(|e| BackendError::Communication(format!("execute close-window: {}", e)))?;
 
-        if !response.ok {
-            let err = response.error.as_deref().unwrap_or("unknown error");
-            return Err(BackendError::Communication(err.to_string()));
-        }
-
+        Self::check_kitty_response(&response, "close-window")?;
         Ok(())
     }
 
@@ -223,14 +317,12 @@ impl TerminalBackend for KittyBackend {
             .map_err(|e| BackendError::Communication(format!("build ls: {}", e)))?;
 
         let mut client = self.client.lock().await;
-        let response = client.execute(&msg).await.map_err(|e| {
-            BackendError::Communication(format!("execute ls: {}", e))
-        })?;
+        let response = client
+            .execute(&msg)
+            .await
+            .map_err(|e| BackendError::Communication(format!("execute ls: {}", e)))?;
 
-        if !response.ok {
-            let err = response.error.as_deref().unwrap_or("unknown error");
-            return Err(BackendError::Communication(err.to_string()));
-        }
+        Self::check_kitty_response(&response, "ls")?;
 
         let os_instances = LsCommand::parse_response(&response)
             .map_err(|e| BackendError::Communication(format!("parse ls response: {}", e)))?;
@@ -266,18 +358,19 @@ impl TerminalBackend for KittyBackend {
         let msg = SetWindowTitleCommand::new(title)
             .match_spec(&match_spec)
             .build()
-            .map_err(|e| BackendError::Communication(format!("build set-window-title: {}", e)))?;
+            .map_err(|e| {
+                BackendError::Communication(format!("build set-window-title: {}", e))
+            })?;
 
         let mut client = self.client.lock().await;
-        let response = client.execute(&msg).await.map_err(|e| {
-            BackendError::Communication(format!("execute set-window-title: {}", e))
-        })?;
+        let response = client
+            .execute(&msg)
+            .await
+            .map_err(|e| {
+                BackendError::Communication(format!("execute set-window-title: {}", e))
+            })?;
 
-        if !response.ok {
-            let err = response.error.as_deref().unwrap_or("unknown error");
-            return Err(BackendError::Communication(err.to_string()));
-        }
-
+        Self::check_kitty_response(&response, "set-window-title")?;
         Ok(())
     }
 }

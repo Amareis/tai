@@ -13,13 +13,15 @@
 - [x] Тесты сериализации типов (18 тестов)
 - [x] Doc-комментарии для всех типов + перенести описание модели данных из `ARCHITECTURE.md`
 
-## Phase 1: Kitty Backend — критический путь
+## Phase 1: Kitty Backend ✅
 
-- [ ] `backend/kitty.rs` — KittyBackend: launch (--hold), close, send-text, send-key, get-text, list-windows
-- [ ] Kitty lifecycle: запуск (видимый по умолчанию, `--hidden` флаг), ожидание socket, heartbeat
-- [ ] Process watch: poll `list_windows` каждые 500мс, detect `at_prompt`, post-mortem: get-text → Frozen → close
-- [ ] Интеграционные тесты с реальным Kitty
-- [ ] Doc-комментарии для TerminalBackend trait + KittyBackend + перенести из `ARCHITECTURE.md`
+- [x] `kitty-rc` crate в workspace (локальный, `crates/kitty_rc`)
+- [x] `backend/kitty.rs` — KittyBackend: spawn (self-managed kitty), connect, launch (--hold), close, send-text, send-key, get-text, list-windows, set-title
+- [x] Kitty lifecycle: `KittyBackend::spawn()` → spawn process → wait for socket → connect; Drop → kill child + remove socket
+- [x] `backend/watch.rs` — ProcessWatch: poll `list_windows`, detect `at_prompt`, post-mortem: get-text → close → event
+- [x] Юнит-тесты ProcessWatch с MockBackend (5 тестов) + 18 тестов Phase 0
+- [ ] Интеграционные тесты с реальным Kitty (требует Kitty в CI/dev)
+- [x] Doc-комментарии для KittyBackend + ProcessWatch
 
 ## Phase 2: Session Manager
 

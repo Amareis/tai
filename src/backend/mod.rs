@@ -1,3 +1,6 @@
+pub mod kitty;
+pub mod watch;
+
 use crate::types::LaunchOpts;
 use async_trait::async_trait;
 use std::fmt;

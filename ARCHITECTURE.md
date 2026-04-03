@@ -277,25 +277,6 @@ Doc-комментарии и определения типов — в исхо�
 
 ---
 
-## Зависимости
-
-Добавлять через `cargo add` **без явных версий** — пусть cargo сам подтянет актуальные.
-
-```bash
-cargo add kitty-rc ratatui crossterm tokio --features tokio/full
-cargo add clap --features clap/derive
-cargo add serde --features serde/derive
-cargo add serde_json toml
-cargo add chrono --features chrono/serde
-cargo add uuid --features uuid/v4
-cargo add tiktoken-rs llm
-cargo add tracing tracing-subscriber thiserror regex
-```
-
-Справочно: `llm` crate — унифицированный интерфейс для LLM бэкендов (Claude, GPT, etc). Заменяет ручной HTTP-вызов через reqwest.
-
----
-
 ## Термины
 
 | Термин | Значение |
