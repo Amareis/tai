@@ -1,0 +1,44 @@
+[package]
+name = "kitty-rc"
+version = "0.4.2"
+edition = "2024"
+description = "A Rust library for controlling kitty terminal emulator via its remote control protocol"
+license = "MIT"
+repository = "https://github.com/rektide/kitty-rc-rs"
+homepage = "https://github.com/rektide/kitty-rc-rs"
+documentation = "https://docs.rs/kitty-rc"
+
+[[bin]]
+name = "list-windows"
+path = "src/bin/list_windows.rs"
+
+[[bin]]
+name = "kitty-pubkey-db"
+path = "src/bin/kitty-pubkey-db.rs"
+
+[[example]]
+name = "test-connectivity"
+path = "examples/test-connectivity.rs"
+
+[[example]]
+name = "test-encrypted"
+path = "examples/test-encrypted.rs"
+
+[dependencies]
+aes-gcm = "0.10"
+base85 = "2.0"
+clap = { version = "4.0", features = ["derive"] }
+rand_core = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+tokio = { version = "1.0", features = ["full"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+xdg = "3.0.0"
+
+[lints.clippy]
+panic = "deny"
+indexing_slicing = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
