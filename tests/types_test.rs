@@ -140,26 +140,17 @@ fn session_queries() {
 }
 
 #[test]
-fn launch_opts_roundtrip() {
-    let opts = LaunchOpts::new("tests".to_string(), "cargo test".to_string());
-    let json = serde_json::to_string(&opts).expect("serialize");
-    let de: LaunchOpts = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(opts, de);
-    assert!(opts.hold);
-    assert!(opts.shell.is_none());
-}
-
-#[test]
-fn launch_opts_with_shell() {
-    let opts = LaunchOpts {
-        title: "repl".to_string(),
-        command: "python3".to_string(),
-        shell: Some("bash".to_string()),
-        hold: true,
-    };
-    let json = serde_json::to_string(&opts).expect("serialize");
-    let de: LaunchOpts = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(opts, de);
+fn launch_opts_new() {
+    let opts = LaunchOpts::new(
+        "tests".to_string(),
+        vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            "cargo test".to_string(),
+        ],
+    );
+    assert_eq!(opts.title, "tests");
+    assert_eq!(opts.args, vec!["bash", "-c", "cargo test"]);
 }
 
 #[test]

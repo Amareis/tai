@@ -52,6 +52,11 @@ impl<B: TerminalBackend> ProcessWatch<B> {
         self.tracked.len()
     }
 
+    /// Проверить, отслеживается ли окно.
+    pub fn is_tracked(&self, window_id: &WindowId) -> bool {
+        self.tracked.contains(window_id)
+    }
+
     /// Один цикл опроса — проверить все отслеживаемые окна.
     ///
     /// Возвращает список завершившихся окон с захваченным выводом.

@@ -37,26 +37,30 @@ impl KittyBackend {
     /// Если `socket_path` — `None`, генерируется путь в temp-директории.
     ///
     /// Метод ждёт появления socket-файла (до `SOCKET_CONNECT_TIMEOUT`).
-    pub async fn spawn(socket_path: Option<PathBuf>) -> Result<Self, BackendError> {
+    pub async fn spawn(socket_path: Option<PathBuf>, hidden: bool) -> Result<Self, BackendError> {
         let socket_path = socket_path.unwrap_or_else(|| {
             std::env::temp_dir().join(format!("tai-kitty-{}.sock", uuid::Uuid::new_v4()))
         });
 
-        let child = Command::new(KITTY_BINARY)
-            .arg("-o")
+        let mut cmd = Command::new(KITTY_BINARY);
+        cmd.arg("-o")
             .arg("allow_remote_control=yes")
             .arg("--listen-on")
-            .arg(format!("unix:{}", socket_path.display()))
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    BackendError::LaunchFailed(
-                        "kitty not found in PATH. Install kitty terminal emulator.".to_string(),
-                    )
-                } else {
-                    BackendError::LaunchFailed(format!("failed to spawn kitty: {}", e))
-                }
-            })?;
+            .arg(format!("unix:{}", socket_path.display()));
+
+        if hidden {
+            cmd.arg("--start-as=hidden");
+        }
+
+        let child = cmd.spawn().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                BackendError::LaunchFailed(
+                    "kitty not found in PATH. Install kitty terminal emulator.".to_string(),
+                )
+            } else {
+                BackendError::LaunchFailed(format!("failed to spawn kitty: {}", e))
+            }
+        })?;
 
         let client = Self::wait_for_socket(&socket_path).await?;
 
@@ -176,17 +180,11 @@ impl Drop for KittyBackend {
 #[async_trait]
 impl TerminalBackend for KittyBackend {
     async fn launch(&self, opts: &LaunchOpts) -> Result<WindowId, BackendError> {
-        let mut cmd_builder = LaunchCommand::new()
-            .args(&opts.command)
+        let msg = LaunchCommand::new()
+            .args(opts.args.clone())
             .window_title(&opts.title)
             .hold(true)
-            .keep_focus(true);
-
-        if let Some(shell) = &opts.shell {
-            cmd_builder = cmd_builder.args(shell);
-        }
-
-        let msg = cmd_builder
+            .keep_focus(true)
             .build()
             .map_err(|e| BackendError::LaunchFailed(format!("build launch command: {}", e)))?;
 

@@ -144,7 +144,7 @@ impl KittenCommand {
 }
 
 pub struct LaunchCommand {
-    args: Option<String>,
+    args: Option<Vec<String>>,
     window_title: Option<String>,
     cwd: Option<String>,
     env: Option<Map<String, serde_json::Value>>,
@@ -220,8 +220,8 @@ impl LaunchCommand {
         }
     }
 
-    pub fn args(mut self, value: impl Into<String>) -> Self {
-        self.args = Some(value.into());
+    pub fn args<S: Into<String>>(mut self, value: impl IntoIterator<Item = S>) -> Self {
+        self.args = Some(value.into_iter().map(Into::into).collect());
         self
     }
 
@@ -379,7 +379,10 @@ impl LaunchCommand {
         let mut payload = Map::new();
 
         if let Some(args) = self.args {
-            payload.insert("args".to_string(), serde_json::Value::String(args));
+            payload.insert(
+                "args".to_string(),
+                serde_json::Value::Array(args.iter().map(|x| x.clone().into()).collect()),
+            );
         }
 
         if let Some(window_title) = self.window_title {
@@ -409,10 +412,7 @@ impl LaunchCommand {
         }
 
         if let Some(window_type) = self.window_type {
-            payload.insert(
-                "window_type".to_string(),
-                serde_json::Value::String(window_type),
-            );
+            payload.insert("type".to_string(), serde_json::Value::String(window_type));
         }
 
         if self.keep_focus {
@@ -934,7 +934,7 @@ mod tests {
     #[test]
     fn test_launch_with_options() {
         let cmd = LaunchCommand::new()
-            .args("bash")
+            .args(vec!["bash"])
             .window_title("Test")
             .cwd("/home")
             .keep_focus(true)

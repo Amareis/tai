@@ -137,26 +137,17 @@ impl Session {
 ///
 /// Ядро гарантирует `hold = true` для всех окон — это предотвращает
 /// потерю вывода при завершении процесса. Модель не контролирует этот флаг.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LaunchOpts {
     /// Заголовок окна
     pub title: String,
-    /// Команда для выполнения
-    pub command: String,
-    /// Опциональная оболочка (bash, zsh, fish, etc.)
-    pub shell: Option<String>,
-    /// Держать окно после завершения (всегда true)
-    pub hold: bool,
+    /// Аргументы команды (argv), например `["bash", "-c", "cargo build"]`
+    pub args: Vec<String>,
 }
 
 impl LaunchOpts {
-    pub fn new(title: String, command: String) -> Self {
-        Self {
-            title,
-            command,
-            shell: None,
-            hold: true,
-        }
+    pub fn new(title: String, args: Vec<String>) -> Self {
+        Self { title, args }
     }
 }
 
