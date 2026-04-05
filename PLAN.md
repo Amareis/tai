@@ -4,6 +4,9 @@
 
 ---
 
+> Принцип: каждая фаза = runnable checkpoint. После каждого шага можно запустить
+> бинарник и проверить руками (и автотестами) что работает.
+
 ## Phase 0: Фундамент ✅
 
 - [x] Cargo workspace, все зависимости, clippy lints
@@ -23,67 +26,109 @@
 - [x] Интеграционные тесты с реальным Kitty (требует Kitty в CI/dev)
 - [x] Doc-комментарии для KittyBackend + ProcessWatch
 
-## Phase 2: FD Passing + Dual Viewport
+### Phase 2: FD Passing + Minimal Dual TUI
 
-- [ ] Добавить зависимости: `nix` (SCM_RIGHTS), `passfd` или аналог
+Цель: `tai server` → Kitty открывается → оба терминала рисуют.
+
+- [ ] Добавить зависимости: `nix` (для SCM_RIGHTS)
 - [ ] `fd/mod.rs` — Unix Domain Socket server/client
-  - Server: listen на `/tmp/tai.sock`, accept, recv FD
-  - Client: connect, send FD (stdin + stdout), sleep
-- [ ] `fd/terminal_manager.rs` — TerminalManager: `HashMap<ViewId, Terminal<CrosstermBackend<File>>>`
-  - Создание terminal на FD
-  - `draw_all()` — перерисовка всех viewport'ов
+    - Server: listen на `/tmp/tai.sock`, accept connection, recv FD через `recvmsg` + `SCM_RIGHTS`
+    - Client: connect, send FD (stdin + stdout) через `sendmsg` + `SCM_RIGHTS`, sleep
+- [ ] `fd/terminal_manager.rs` — TerminalManager
+    - `HashMap<ViewId, Terminal<CrosstermBackend<File>>>`
+    - Создание terminal на FD (User viewport при старте, Model viewport при подключении client)
+    - `draw_all()` — перерисовка всех viewport'ов
 - [ ] Обновить `main.rs` — clap subcommands:
-  - `tai server [--socket PATH] [--hidden]` — spawn Kitty с `tai client`, ждать FD
-  - `tai client --socket PATH` — подключиться, передать FD, sleep
-- [ ] SIGWINCH в client → resize message → server вызывает `terminal.resize()`
-- [ ] Адаптация e2e тестов: `tai server` → Kitty открывается → оба viewport рисуют
-- [ ] Doc-комментарии для fd модуля
+    - `tai server [--socket PATH] [--hidden]` — инициализирует User Viewport на stdout,
+      spawn Kitty с `kitty -- tai client --socket PATH`, ждёт FD, создаёт Model Viewport
+    - `tai client --socket PATH` — подключиться к сокету, передать FD, sleep
+- [ ] SIGWINCH handler в client → resize message через Unix socket → server вызывает `terminal.resize()`
+- [ ] Минимальная отрисовка: User Viewport = "TAI Server (User)", Model Viewport = "TAI Model Workspace"
+- [ ] **Checkpoint**: запускаю `tai server` → Kitty открывается → оба окна показывают текст → resize работает
+- [ ] Doc-комментарии
 
-## Phase 3: Session Manager
+### Phase 3: Command Parser + Window Operations
 
-- [ ] `manifest.rs` — session.json read/write
-- [ ] `manager.rs` — Window lifecycle (Active→Frozen→Archived), focus/summarize, список окон для валидации
-- [ ] `snapshot.rs` — frozen content save/load
-- [ ] Doc-комментарии для session модуля + перенести из `ARCHITECTURE.md`
+Цель: печатаю `launch bash` в Kitty окно → появляется новое окно → вижу в User Viewport.
 
-## Phase 3: Prompt Assembly
+- [ ] `routing/parser.rs` — парсинг текстовых команд из Model Viewport
+    - Формат: `launch --title name -- cmd args`, `close <window-id>`, `focus <window-id>`,
+      `list`, `send <window-id> text...`
+    - Простой line-based парсер (не code blocks — это для модели, человек пишет plain commands)
+- [ ] `routing/tai_command.rs` — TaiCommand enum, парсер команд
+- [ ] Чтение ввода из Model Viewport (crossterm events → command parser → dispatch)
+- [ ] Dispatch: tai_command → backend calls (launch, close, send-text, list-windows, get-text)
+- [ ] User Viewport: список окон (обновляется после каждой команды)
+- [ ] Model Viewport: результат команды (stdout-style feedback: "launched window abc123")
+- [ ] **Checkpoint**: в Kitty окне набираю `launch bash` → появляется Kitty tab → `list` → вижу оба окна → `close 1` → окно закрылось
+- [ ] Тесты парсера (валидные/невалидные команды)
+- [ ] Doc-комментарии
 
-- [ ] `layout.rs` — PromptLayout trait + дефолтная реализация
-- [ ] `budget.rs` — подсчёт токенов, бюджет слоёв (Immutable 20% / Ephemeral 70% / System 10%)
-- [ ] `assembler.rs` — сборка через trait
-- [ ] `references.rs` — сбор --help/man page для окон с правом записи
-- [ ] Тесты лейаута
-- [ ] Doc-комментарии для prompt модуля + перенести из `ARCHITECTURE.md`
+### Phase 4: Window Lifecycle + Session Persistence
 
-## Phase 4: Routing + L-Model
+Цель: перезапускаю `tai server` → окна восстанавливаются, frozen данные на месте.
 
-- [ ] `parser.rs` — parse_blocks(): обязательные window:mode, валидация по списку окон
-- [ ] `tai_command.rs` — парсер команд ядра (launch, close, focus, summarize)
-- [ ] `l_model.rs` — HTTP клиент к Claude/GPT API, извлечение thinking
-- [ ] Тесты парсера (валидные/невалидные блоки, tai:cmd)
-- [ ] Doc-комментарии для routing модуля + перенести из `ARCHITECTURE.md`
+- [ ] `session/manager.rs` — Window lifecycle (Active → Frozen → Archived)
+    - at_prompt detection → freeze → get-text → snapshot → close
+    - Focus/summarize: управление какие окна в "контексте"
+- [ ] `session/manifest.rs` — session.json read/write (window registry, metadata)
+- [ ] `session/snapshot.rs` — frozen content save/load
+- [ ] Graceful shutdown: freeze all active → save manifest → kill Kitty
+- [ ] Recovery при старте: load manifest → reconnect/recreate windows
+- [ ] **Checkpoint**: запускаю `launch bash -c "echo hello && sleep 5"` → команда выполняется → окно freezes → exit code + вывод сохранены → рестарт tai → frozen данные доступны
+- [ ] Тесты lifecycle с MockBackend
+- [ ] Doc-комментарии
 
-## Phase 5: Kernel Event Loop
+### Phase 5: Prompt Assembly
 
-- [ ] `kernel/mod.rs` — main tick loop + trigger system (at_prompt / chat / idle timeout)
-- [ ] Thinking → mind.md
+Цель: вижу собранный промпт в debug output. Реальные данные из окон.
+
+- [ ] `prompt/layout.rs` — PromptLayout trait + дефолтная реализация
+    - Immutable layer: system prompt + mind.md
+    - Ephemeral layer: dashboard + focused windows + previous response
+    - System layer: status bar (tokens, windows, write target)
+- [ ] `prompt/budget.rs` — подсчёт токенов (tiktoken-rs), бюджет слоёв
+- [ ] `prompt/assembler.rs` — сборка промпта через PromptLayout
+- [ ] `prompt/references.rs` — сбор --help/man page для окон с правом записи
+- [ ] Model Viewport: команда `prompt` → показывает собранный промпт (для debug)
+- [ ] **Checkpoint**: открываю несколько окон → `prompt` → вижу полный промпт с содержимым окон, mind, budget
+- [ ] Тесты layout (mock данные, проверка структуры и бюджета)
+- [ ] Doc-комментарии
+
+### Phase 6: L-Model + Event Loop
+
+Цель: полный цикл. Пишу в Kitty → модель отвечает → ядро исполняет → результат виден.
+
+- [ ] `models/l_model.rs` — LLM клиент через llm crate (Claude/GPT API)
+- [ ] Расширить parser: модель отвечает markdown с code blocks (```window:mode```)
+    - Человек: plain commands (из Phase B)
+    - Модель: code blocks с обязательными window:mode
+    - Один парсер, два input format
+- [ ] `kernel/mod.rs` — main tick loop
+    - Триггеры: at_prompt (command done) / user input in Model Viewport / idle timeout
+    - Tick: assemble → invoke model → parse response → execute blocks → wait
+    - Blocks выполняются параллельно
+- [ ] Thinking → mind.md (извлечение из extended thinking)
 - [ ] Обработка ошибок: изоляция между блоками, timeout (30с)
-- [ ] Graceful shutdown (SIGINT/SIGTERM)
-- [ ] Doc-комментарии для kernel модуля + перенести из `ARCHITECTURE.md`
+- [ ] Model Viewport: показывает ответы модели (prose + executed blocks)
+- [ ] User Viewport: debug view — что модель решила, что выполнилось
+- [ ] **Checkpoint**: пишу в Kitty "найди все TODO в проекте" → модель открывает окно с grep → результат виден → модель докладывает
+- [ ] Doc-комментарии
 
-## Phase 7: Dual TUI Viewports
+### Phase 7: TUI Polish
 
-- [ ] `tui/mod.rs` — TerminalManager интеграция, event loop для обоих viewport
-- [ ] `tui/model_view.rs` — Model Viewport (Kitty окно):
-  - Chat: диалог с моделью, человек пишет напрямую
-  - Context view: focused окна, dashboard, previous response
-  - Status bar
-- [ ] `tui/user_view.rs` — User Viewport (терминал человека):
-  - Windows tab: список окон, focus/summarize/view frozen
-  - Debug tab: пошаговое исполнение (Step / Run All / Edit / Skip)
-  - Status bar
+Цель: полноценные интерактивные интерфейсы в обоих viewport'ах.
+
+- [ ] Model Viewport — Chat UI:
+    - Scrollable история, подсветка code blocks, input field
+    - Context view: collapsible focused windows
+- [ ] User Viewport — Debug UI:
+    - Windows tab: список с фильтрами, preview frozen content
+    - Debug tab: пошаговое исполнение (Step / Run All / Edit / Skip)
+    - Status bar: токены, активные окна, write target, tick count
 - [ ] `tui/status_bar.rs` — общие компоненты
-- [ ] Doc-комментарии для tui модуля + перенести из `ARCHITECTURE.md`
+- [ ] Обработка горячих клавиш в обоих viewport'ах
+- [ ] **Checkpoint**: полноценная интерактивная сессия — model view как IDE, user view как dashboard
 
 ## Открытые вопросы
 
@@ -105,10 +150,10 @@
 **Открытый вопрос:** как именно stderr Kitty процесса интегрируется в tick cycle — отдельное окно?
 Строка в dashboard? Event в kernel loop? Решить при реализации Phase 5/6.
 
-## Phase 7: S-Models (отложено)
+## S-Models
 
 Лёгкие модели-наблюдатели для свёрнутых окон. Система полностью работает без них.
 
-## Phase 8: IPC / Remote API (отложено)
+## IPC / Remote API 
 
 Unix socket или HTTP API для внешних клиентов. Когда появится TmuxBackend или remote.
