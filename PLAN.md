@@ -30,20 +30,20 @@
 
 Цель: `tai server` → Kitty открывается → оба терминала рисуют.
 
-- [ ] Добавить зависимости: `nix` (для SCM_RIGHTS)
-- [ ] `fd/mod.rs` — Unix Domain Socket server/client
+- [x] Добавить зависимости: `roam-fdpass` (для SCM_RIGHTS)
+- [x] `fd/mod.rs` — Unix Domain Socket server/client
     - Server: listen на `/tmp/tai.sock`, accept connection, recv FD через `recvmsg` + `SCM_RIGHTS`
-    - Client: connect, send FD (stdin + stdout) через `sendmsg` + `SCM_RIGHTS`, sleep
+    - Client: connect, send FD (stdout) через `sendmsg` + `SCM_RIGHTS`, sleep
 - [ ] `fd/terminal_manager.rs` — TerminalManager
     - `HashMap<ViewId, Terminal<CrosstermBackend<File>>>`
     - Создание terminal на FD (User viewport при старте, Model viewport при подключении client)
     - `draw_all()` — перерисовка всех viewport'ов
-- [ ] Обновить `main.rs` — clap subcommands:
+- [x] Обновить `main.rs` — clap subcommands:
     - `tai server [--socket PATH] [--hidden]` — инициализирует User Viewport на stdout,
       spawn Kitty с `kitty -- tai client --socket PATH`, ждёт FD, создаёт Model Viewport
     - `tai client --socket PATH` — подключиться к сокету, передать FD, sleep
 - [ ] SIGWINCH handler в client → resize message через Unix socket → server вызывает `terminal.resize()`
-- [ ] Минимальная отрисовка: User Viewport = "TAI Server (User)", Model Viewport = "TAI Model Workspace"
+- [x] Минимальная отрисовка: User Viewport = "TAI Server (User)", Model Viewport = "TAI Model Workspace"
 - [ ] **Checkpoint**: запускаю `tai server` → Kitty открывается → оба окна показывают текст → resize работает
 - [ ] Doc-комментарии
 

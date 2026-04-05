@@ -19,9 +19,8 @@ const SOCKET_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Kitty terminal backend — управляет окнами через Kitty Remote Control protocol.
 ///
-/// Может подключиться к уже запущенному Kitty (`connect`) или запустить свой
-/// собственный инстанс (`spawn`). При `spawn` бэкенд владеет child-процессом
-/// и убивает Kitty при drop.
+/// Запускает свой собственный инстанс (`spawn`). При  этом бэкенд владеет child-процессом
+/// и убивает его при drop.
 ///
 /// Все `launch`-вызовы гарантированно используют `hold = true` — ядро
 /// предотвращает потерю вывода при завершении процесса.
@@ -40,24 +39,30 @@ impl KittyBackend {
     /// Если `socket_path` — `None`, генерируется путь в temp-директории.
     ///
     /// Метод ждёт появления socket-файла (до `SOCKET_CONNECT_TIMEOUT`).
-    pub async fn spawn(socket_path: Option<PathBuf>, hidden: bool) -> Result<Self, BackendError> {
+    pub async fn spawn(run_cmd: &[&str], socket_path: Option<PathBuf>, hidden: bool) -> Result<Self, BackendError> {
         let socket_path = socket_path.unwrap_or_else(|| {
             std::env::temp_dir().join(format!("tai-kitty-{}.sock", uuid::Uuid::new_v4()))
         });
 
         let mut cmd = Command::new(KITTY_BINARY);
-        cmd.kill_on_drop(true);
 
-        cmd.arg("-o")
+        cmd
+            .kill_on_drop(true)
+            // TODO записывать stderr и что-то с ним делать (см. план)
+            .stderr(Stdio::null())
+
+            .arg("-o")
             .arg("allow_remote_control=yes")
             .arg("--listen-on")
-            .arg(format!("unix:{}", socket_path.display()))
-            // TODO записывать stderr и что-то с ним делать (см. план)
-            .stderr(Stdio::null());
+            .arg(format!("unix:{}", socket_path.display()));
 
         if hidden {
             cmd.arg("--start-as=hidden");
         }
+
+        cmd.args(run_cmd);
+
+        tracing::info!("starting KittyBackend, args: {:?}", run_cmd);
 
         let child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {

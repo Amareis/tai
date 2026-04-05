@@ -5,7 +5,7 @@ use tai::types::LaunchOpts;
 
 #[allow(clippy::expect_used)]
 async fn spawn_backend() -> KittyBackend {
-    KittyBackend::spawn(None, true)
+    KittyBackend::spawn(&[], None, true)
         .await
         .expect("kitty should be available in PATH")
 }
