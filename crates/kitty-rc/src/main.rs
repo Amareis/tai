@@ -170,7 +170,6 @@ async fn handle_list_windows() -> Result<(), KittyError> {
         println!("\nError: {}", error);
     }
 
-    kitty.close().await?;
     Ok(())
 }
 

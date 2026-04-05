@@ -4,9 +4,10 @@ use kitty_rc::{
     SendKeyCommand, SendTextCommand, SetWindowTitleCommand,
 };
 use std::path::PathBuf;
+use std::process::Stdio;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
-use tokio::time::Duration;
+use tokio::time::{Duration};
 
 use crate::types::LaunchOpts;
 
@@ -26,8 +27,10 @@ const SOCKET_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 /// предотвращает потерю вывода при завершении процесса.
 pub struct KittyBackend {
     client: Mutex<Kitty>,
-    child: Option<Child>,
     socket_path: PathBuf,
+
+    #[allow(dead_code)]
+    child: Option<Child>,
 }
 
 impl KittyBackend {
@@ -43,10 +46,14 @@ impl KittyBackend {
         });
 
         let mut cmd = Command::new(KITTY_BINARY);
+        cmd.kill_on_drop(true);
+
         cmd.arg("-o")
             .arg("allow_remote_control=yes")
             .arg("--listen-on")
-            .arg(format!("unix:{}", socket_path.display()));
+            .arg(format!("unix:{}", socket_path.display()))
+            // TODO записывать stderr и что-то с ним делать (см. план)
+            .stderr(Stdio::null());
 
         if hidden {
             cmd.arg("--start-as=hidden");
@@ -71,45 +78,9 @@ impl KittyBackend {
         })
     }
 
-    /// Подключиться к уже запущенному Kitty по socket path.
-    pub async fn connect(socket_path: PathBuf) -> Result<Self, BackendError> {
-        let client = Self::connect_to_socket(&socket_path).await?;
-        Ok(Self {
-            client: Mutex::new(client),
-            child: None,
-            socket_path,
-        })
-    }
-
-    /// Подключиться к уже запущенному Kitty по PID.
-    pub async fn from_pid(pid: u32) -> Result<Self, BackendError> {
-        let builder = KittyBuilder::new()
-            .pid(pid)
-            .timeout(SOCKET_CONNECT_TIMEOUT);
-
-        let client = builder.connect().await.map_err(|e| {
-            BackendError::Communication(format!(
-                "failed to connect to kitty pid {}: {}",
-                pid, e
-            ))
-        })?;
-
-        let socket_path = PathBuf::from(format!("kitty-{}.sock", pid));
-        Ok(Self {
-            client: Mutex::new(client),
-            child: None,
-            socket_path,
-        })
-    }
-
     /// Путь к socket, через который идёт связь.
     pub fn socket_path(&self) -> &PathBuf {
         &self.socket_path
-    }
-
-    /// Владеет ли этот бэкенд Kitty-процессом (был запущен через `spawn`).
-    pub fn owns_process(&self) -> bool {
-        self.child.is_some()
     }
 
     async fn wait_for_socket(socket_path: &PathBuf) -> Result<Kitty, BackendError> {
@@ -165,15 +136,6 @@ impl KittyBackend {
             )));
         }
         Ok(())
-    }
-}
-
-impl Drop for KittyBackend {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
-        }
-        let _ = std::fs::remove_file(&self.socket_path);
     }
 }
 

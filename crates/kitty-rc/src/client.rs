@@ -298,11 +298,6 @@ impl Kitty {
         self.stream = new_stream;
         Ok(())
     }
-
-    pub async fn close(mut self) -> Result<(), KittyError> {
-        self.stream.shutdown().await.ok();
-        Ok(())
-    }
 }
 
 #[cfg(test)]

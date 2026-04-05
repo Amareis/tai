@@ -17,11 +17,6 @@ enum Cli {
         #[arg(long)]
         hidden: bool,
     },
-    /// Connect to an already running Kitty
-    Connect {
-        /// Socket path of running kitty
-        socket: String,
-    },
 }
 
 #[tokio::main]
@@ -33,7 +28,6 @@ async fn main() {
             let socket_path = socket.map(PathBuf::from);
             KittyBackend::spawn(socket_path, hidden).await
         }
-        Cli::Connect { socket } => KittyBackend::connect(PathBuf::from(socket)).await,
     };
 
     let backend = match backend {
@@ -71,7 +65,7 @@ async fn main() {
         }
     }
 
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
 
     let windows = backend.list_windows().await.unwrap_or_default();
     for w in &windows {

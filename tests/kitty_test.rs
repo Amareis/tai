@@ -14,7 +14,6 @@ async fn spawn_backend() -> KittyBackend {
 async fn spawn_connects_to_kitty() {
     let backend = spawn_backend().await;
     assert!(backend.socket_path().exists());
-    assert!(backend.owns_process());
 }
 
 #[tokio::test]
