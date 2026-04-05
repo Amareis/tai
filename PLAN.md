@@ -20,10 +20,26 @@
 - [x] Kitty lifecycle: `KittyBackend::spawn()` → spawn process → wait for socket → connect; Drop → kill child + remove socket
 - [x] `backend/watch.rs` — ProcessWatch: poll `list_windows`, detect `at_prompt`, post-mortem: get-text → close → event
 - [x] Юнит-тесты ProcessWatch с MockBackend (5 тестов) + 18 тестов Phase 0
-- [ ] Интеграционные тесты с реальным Kitty (требует Kitty в CI/dev)
+- [x] Интеграционные тесты с реальным Kitty (требует Kitty в CI/dev)
 - [x] Doc-комментарии для KittyBackend + ProcessWatch
 
-## Phase 2: Session Manager
+## Phase 2: FD Passing + Dual Viewport
+
+- [ ] Добавить зависимости: `nix` (SCM_RIGHTS), `passfd` или аналог
+- [ ] `fd/mod.rs` — Unix Domain Socket server/client
+  - Server: listen на `/tmp/tai.sock`, accept, recv FD
+  - Client: connect, send FD (stdin + stdout), sleep
+- [ ] `fd/terminal_manager.rs` — TerminalManager: `HashMap<ViewId, Terminal<CrosstermBackend<File>>>`
+  - Создание terminal на FD
+  - `draw_all()` — перерисовка всех viewport'ов
+- [ ] Обновить `main.rs` — clap subcommands:
+  - `tai server [--socket PATH] [--hidden]` — spawn Kitty с `tai client`, ждать FD
+  - `tai client --socket PATH` — подключиться, передать FD, sleep
+- [ ] SIGWINCH в client → resize message → server вызывает `terminal.resize()`
+- [ ] Адаптация e2e тестов: `tai server` → Kitty открывается → оба viewport рисуют
+- [ ] Doc-комментарии для fd модуля
+
+## Phase 3: Session Manager
 
 - [ ] `manifest.rs` — session.json read/write
 - [ ] `manager.rs` — Window lifecycle (Active→Frozen→Archived), focus/summarize, список окон для валидации
@@ -55,14 +71,39 @@
 - [ ] Graceful shutdown (SIGINT/SIGTERM)
 - [ ] Doc-комментарии для kernel модуля + перенести из `ARCHITECTURE.md`
 
-## Phase 6: TUI
+## Phase 7: Dual TUI Viewports
 
-- [ ] `tui/mod.rs` — app state, ratatui setup, event loop
-- [ ] `tui/chat.rs` — таб чата с моделью
-- [ ] `tui/windows.rs` — список окон, focus/summarize/view frozen
-- [ ] `tui/debug.rs` — пошаговое исполнение (Step / Run All / Edit / Skip)
-- [ ] `tui/status_bar.rs` — status bar
+- [ ] `tui/mod.rs` — TerminalManager интеграция, event loop для обоих viewport
+- [ ] `tui/model_view.rs` — Model Viewport (Kitty окно):
+  - Chat: диалог с моделью, человек пишет напрямую
+  - Context view: focused окна, dashboard, previous response
+  - Status bar
+- [ ] `tui/user_view.rs` — User Viewport (терминал человека):
+  - Windows tab: список окон, focus/summarize/view frozen
+  - Debug tab: пошаговое исполнение (Step / Run All / Edit / Skip)
+  - Status bar
+- [ ] `tui/status_bar.rs` — общие компоненты
 - [ ] Doc-комментарии для tui модуля + перенести из `ARCHITECTURE.md`
+
+## Открытые вопросы
+
+### Stderr routing (три канала)
+
+Три разных stderr-потока в системе, каждый требует своего решения:
+
+1. **TAI kernel stderr** — сейчас `eprintln!`. Сломает TUI когда ratatui захватит терминал.
+   → Решение: `tracing` с записью в log file (`~/.local/share/tai/kernel.log`).
+   Debug tab может показывать tail этого файла.
+
+2. **Kitty child process stderr** — сейчас `Stdio::null()` в `kitty.rs:55`. Теряем диагностику Kitty
+   (ошибки RC protocol, предупреждения).
+   → Решение: pipe stderr Kitty → async buffer → доступно модели как feedback.
+   Возможно стоит выводить в отдельное TUI окно или feed в debug tab.
+
+3. **Window process stderr** — через PTY, смешан с stdout. Модель видит через get-text. ✅ Не требует изменений.
+
+**Открытый вопрос:** как именно stderr Kitty процесса интегрируется в tick cycle — отдельное окно?
+Строка в dashboard? Event в kernel loop? Решить при реализации Phase 5/6.
 
 ## Phase 7: S-Models (отложено)
 
