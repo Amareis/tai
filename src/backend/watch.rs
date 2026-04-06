@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use tokio::time;
 
-use crate::backend::{BackendError, TerminalBackend, WindowId};
+use crate::backend::{
+    BackendCmd, BackendError, CloseCmd, CmdResponse, GetTextCmd, TerminalBackend, WindowId,
+};
 
 /// Событие завершения окна — процесс дошёл до prompt.
 #[derive(Debug, Clone)]
@@ -66,7 +68,15 @@ impl<B: TerminalBackend> ProcessWatch<B> {
             return Ok(Vec::new());
         }
 
-        let all_windows = self.backend.list_windows().await?;
+        let all_windows = match self.backend.execute(BackendCmd::List).await? {
+            CmdResponse::Windows(windows) => windows,
+            CmdResponse::Error(e) => return Err(BackendError::Communication(e)),
+            _ => {
+                return Err(BackendError::Communication(
+                    "unexpected response for List".into(),
+                ));
+            }
+        };
 
         let at_prompt_ids: HashSet<WindowId> = all_windows
             .into_iter()
@@ -82,15 +92,28 @@ impl<B: TerminalBackend> ProcessWatch<B> {
         let mut to_remove = Vec::new();
 
         for window_id in &at_prompt_ids {
-            let content = match self.backend.get_text(window_id).await {
-                Ok(text) => text,
+            let content = match self
+                .backend
+                .execute(BackendCmd::GetText(GetTextCmd {
+                    window: window_id.clone(),
+                }))
+                .await
+            {
+                Ok(CmdResponse::Text(text)) => text,
+                Ok(_) => String::new(),
                 Err(e) => {
                     tracing::warn!("get_text failed for window {}: {}", window_id, e);
                     String::new()
                 }
             };
 
-            if let Err(e) = self.backend.close(window_id).await {
+            if let Err(e) = self
+                .backend
+                .execute(BackendCmd::Close(CloseCmd {
+                    window: window_id.clone(),
+                }))
+                .await
+            {
                 tracing::warn!("close failed for window {}: {}", window_id, e);
             }
 
@@ -134,8 +157,9 @@ impl<B: TerminalBackend> ProcessWatch<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{BackendError, WindowInfo};
-    use crate::types::LaunchOpts;
+    use crate::backend::{
+        BackendCmd, BackendError, CmdResponse, TerminalBackend, WindowId, WindowInfo,
+    };
     use async_trait::async_trait;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -178,46 +202,45 @@ mod tests {
             }
         }
     }
-
     #[async_trait]
     impl TerminalBackend for MockBackend {
-        async fn launch(&self, _opts: &LaunchOpts) -> Result<WindowId, BackendError> {
-            Ok(WindowId("mock-1".to_string()))
-        }
-        async fn send_text(&self, _window: &WindowId, _text: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-        async fn send_keys(&self, _window: &WindowId, _keys: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-        async fn get_text(&self, window: &WindowId) -> Result<String, BackendError> {
-            self.get_text_calls.fetch_add(1, Ordering::SeqCst);
-            let windows = self.windows.lock().unwrap();
-            let w = windows
-                .iter()
-                .find(|w| w.id == *window)
-                .ok_or_else(|| BackendError::WindowNotFound(window.to_string()))?;
-            Ok(w.text.clone())
-        }
-        async fn close(&self, window: &WindowId) -> Result<(), BackendError> {
-            let mut windows = self.windows.lock().unwrap();
-            windows.retain(|w| w.id != *window);
-            Ok(())
-        }
-        async fn list_windows(&self) -> Result<Vec<WindowInfo>, BackendError> {
-            let windows = self.windows.lock().unwrap();
-            Ok(windows
-                .iter()
-                .map(|w| WindowInfo {
-                    id: w.id.clone(),
-                    title: w.title.clone(),
-                    pid: 1,
-                    is_at_prompt: w.at_prompt,
-                })
-                .collect())
-        }
-        async fn set_title(&self, _window: &WindowId, _title: &str) -> Result<(), BackendError> {
-            Ok(())
+        async fn execute(&self, cmd: BackendCmd) -> Result<CmdResponse, BackendError> {
+            match cmd {
+                BackendCmd::Launch(_) => {
+                    Ok(CmdResponse::WindowCreated(WindowId("mock-1".to_string())))
+                }
+                BackendCmd::SendText(_) | BackendCmd::SendKeys(_) | BackendCmd::SetTitle(_) => {
+                    Ok(CmdResponse::Ok)
+                }
+                BackendCmd::GetText(cmd) => {
+                    self.get_text_calls.fetch_add(1, Ordering::SeqCst);
+                    let windows = self.windows.lock().unwrap();
+                    let w = windows
+                        .iter()
+                        .find(|w| w.id == cmd.window)
+                        .ok_or_else(|| BackendError::WindowNotFound(cmd.window.to_string()))?;
+                    Ok(CmdResponse::Text(w.text.clone()))
+                }
+                BackendCmd::Close(cmd) => {
+                    let mut windows = self.windows.lock().unwrap();
+                    windows.retain(|w| w.id != cmd.window);
+                    Ok(CmdResponse::Ok)
+                }
+                BackendCmd::List => {
+                    let windows = self.windows.lock().unwrap();
+                    Ok(CmdResponse::Windows(
+                        windows
+                            .iter()
+                            .map(|w| WindowInfo {
+                                id: w.id.clone(),
+                                title: w.title.clone(),
+                                pid: 1,
+                                is_at_prompt: w.at_prompt,
+                            })
+                            .collect(),
+                    ))
+                }
+            }
         }
     }
 

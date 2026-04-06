@@ -15,7 +15,8 @@ use ratatui::widgets::Paragraph;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::backend::TerminalBackend;
+use crate::backend::{CmdResponse, TerminalBackend};
+use crate::routing::parser;
 use connection::Connection;
 use rustyline_async::ReadlineError;
 use thiserror::Error;
@@ -139,12 +140,54 @@ impl<Back: TerminalBackend> Server<Back> {
 
 async fn client_loop(
     client: &mut Connection,
-    _back: &mut impl TerminalBackend,
+    back: &mut impl TerminalBackend,
 ) -> Result<bool, CoreError> {
     if let Some(line) = client.read_line().await? {
         info!("received from model channel: {}", line);
-        client.write_line(&format!("Echo: {line}")).await?;
-        Ok(line == "exit")
+
+        if line == "exit" {
+            return Ok(true);
+        }
+
+        match parser::parse(&line) {
+            Ok(cmd) => match back.execute(cmd).await {
+                Ok(response) => match response {
+                    CmdResponse::WindowCreated(id) => {
+                        client.write_line(&format!("Window created: {id}")).await?;
+                    }
+                    CmdResponse::Text(text) => {
+                        client.write_line(&text).await?;
+                    }
+                    CmdResponse::Windows(windows) => {
+                        client
+                            .write_line(&format!("{} windows:", windows.len()))
+                            .await?;
+                        for w in windows {
+                            client
+                                .write_line(&format!(
+                                    "  {} | {} | pid {} | prompt: {}",
+                                    w.id, w.title, w.pid, w.is_at_prompt
+                                ))
+                                .await?;
+                        }
+                    }
+                    CmdResponse::Ok => {
+                        client.write_line("OK").await?;
+                    }
+                    CmdResponse::Error(e) => {
+                        client.write_line(&format!("Error: {e}")).await?;
+                    }
+                },
+                Err(e) => {
+                    client.write_line(&format!("Backend error: {e}")).await?;
+                }
+            },
+            Err(e) => {
+                client.write_line(&format!("Parse error: {e}")).await?;
+            }
+        }
+
+        Ok(false)
     } else {
         info!("model channel closed");
         Err(CoreError::ConnectionClosed)

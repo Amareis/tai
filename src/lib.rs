@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod config;
 pub mod core;
+pub mod routing;
 pub mod types;
 
 use crate::core::{Client, Server, bind};

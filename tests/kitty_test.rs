@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
-use tai::backend::TerminalBackend;
 use tai::backend::kitty::KittyBackend;
-use tai::types::LaunchOpts;
+use tai::backend::{BackendCmd, CmdResponse, LaunchCmd, TerminalBackend};
 
 #[allow(clippy::expect_used)]
 async fn spawn_backend_with_path() -> (KittyBackend, PathBuf) {
@@ -30,10 +29,10 @@ async fn spawn_connects_to_kitty() {
 #[tokio::test]
 async fn list_windows_returns_initial() {
     let backend = spawn_backend().await;
-    let windows = backend
-        .list_windows()
+    let CmdResponse::Windows(windows) = backend
+        .execute(BackendCmd::List)
         .await
-        .expect("list_windows should work");
+        .expect("list should work") else { panic!("expected Windows response") };
     assert!(
         !windows.is_empty(),
         "kitty should have at least one initial window"
@@ -44,20 +43,22 @@ async fn list_windows_returns_initial() {
 async fn launch_creates_window() {
     let backend = spawn_backend().await;
 
-    let opts = LaunchOpts::new(
-        "test-echo".to_string(),
-        vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            "echo hello-world".to_string(),
-        ],
-    );
-    let window_id = backend.launch(&opts).await.expect("launch should succeed");
-
-    let windows = backend
-        .list_windows()
+    let CmdResponse::WindowCreated(window_id) = backend
+        .execute(BackendCmd::Launch(LaunchCmd {
+            title: Some("test-echo".to_string()),
+            command: vec![
+                "bash".to_string(),
+                "-c".to_string(),
+                "echo hello-world".to_string(),
+            ],
+        }))
         .await
-        .expect("list_windows should work");
+        .expect("launch should succeed") else { panic!("expected WindowCreated response") };
+
+    let CmdResponse::Windows(windows) = backend
+        .execute(BackendCmd::List)
+        .await
+        .expect("list should work") else { panic!("expected Windows response") };
     let found = windows.iter().any(|w| w.id == window_id);
     assert!(found, "launched window should appear in list");
 }
@@ -66,22 +67,26 @@ async fn launch_creates_window() {
 async fn get_text_returns_content() {
     let backend = spawn_backend().await;
 
-    let opts = LaunchOpts::new(
-        "test-text".to_string(),
-        vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            "echo marker-42".to_string(),
-        ],
-    );
-    let window_id = backend.launch(&opts).await.expect("launch should succeed");
+    let CmdResponse::WindowCreated(window_id) = backend
+        .execute(BackendCmd::Launch(LaunchCmd {
+            title: Some("test-text".to_string()),
+            command: vec![
+                "bash".to_string(),
+                "-c".to_string(),
+                "echo marker-42".to_string(),
+            ],
+        }))
+        .await
+        .expect("launch should succeed") else { panic!("expected WindowCreated") };
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let text = backend
-        .get_text(&window_id)
+    let CmdResponse::Text(text) = backend
+        .execute(BackendCmd::GetText(tai::backend::GetTextCmd {
+            window: window_id.clone(),
+        }))
         .await
-        .expect("get_text should work");
+        .expect("get_text should work") else { panic!("expected Text response") };
     assert!(
         text.contains("marker-42"),
         "get_text should contain output, got: {text:?}",
@@ -92,21 +97,31 @@ async fn get_text_returns_content() {
 async fn send_text_to_window() {
     let backend = spawn_backend().await;
 
-    let opts = LaunchOpts::new("test-send".to_string(), vec!["cat".to_string()]);
-    let window_id = backend.launch(&opts).await.expect("launch should succeed");
+    let CmdResponse::WindowCreated(window_id) = backend
+        .execute(BackendCmd::Launch(LaunchCmd {
+            title: Some("test-send".to_string()),
+            command: vec!["cat".to_string()],
+        }))
+        .await
+        .expect("launch should succeed") else { panic!("expected WindowCreated") };
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     backend
-        .send_text(&window_id, "hello-from-tai\n")
+        .execute(BackendCmd::SendText(tai::backend::SendTextCmd {
+            window: window_id.clone(),
+            text: "hello-from-tai\n".to_string(),
+        }))
         .await
         .expect("send_text should succeed");
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let text = backend
-        .get_text(&window_id)
+    let CmdResponse::Text(text) = backend
+        .execute(BackendCmd::GetText(tai::backend::GetTextCmd {
+            window: window_id.clone(),
+        }))
         .await
-        .expect("get_text should work");
+        .expect("get_text should work") else { panic!("expected Text") };
     assert!(
         text.contains("hello-from-tai"),
         "sent text should appear in window, got: {text:?}",
@@ -117,24 +132,34 @@ async fn send_text_to_window() {
 async fn close_window() {
     let backend = spawn_backend().await;
 
-    let opts = LaunchOpts::new(
-        "test-close".to_string(),
-        vec!["sleep".to_string(), "60".to_string()],
-    );
-    let window_id = backend.launch(&opts).await.expect("launch should succeed");
+    let CmdResponse::WindowCreated(window_id) = backend
+        .execute(BackendCmd::Launch(LaunchCmd {
+            title: Some("test-close".to_string()),
+            command: vec!["sleep".to_string(), "60".to_string()],
+        }))
+        .await
+        .expect("launch should succeed") else { panic!("expected WindowCreated") };
 
-    let before = backend.list_windows().await.expect("list should work");
+    let CmdResponse::Windows(before) = backend
+        .execute(BackendCmd::List)
+        .await
+        .expect("list should work") else { panic!("expected Windows") };
     let had_window = before.iter().any(|w| w.id == window_id);
     assert!(had_window);
 
     backend
-        .close(&window_id)
+        .execute(BackendCmd::Close(tai::backend::CloseCmd {
+            window: window_id.clone(),
+        }))
         .await
         .expect("close should succeed");
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let after = backend.list_windows().await.expect("list should work");
+    let CmdResponse::Windows(after) = backend
+        .execute(BackendCmd::List)
+        .await
+        .expect("list should work") else { panic!("expected Windows") };
     let still_has = after.iter().any(|w| w.id == window_id);
     assert!(!still_has, "closed window should not appear in list");
 }
@@ -143,18 +168,26 @@ async fn close_window() {
 async fn set_title() {
     let backend = spawn_backend().await;
 
-    let opts = LaunchOpts::new(
-        "original-title".to_string(),
-        vec!["sleep".to_string(), "60".to_string()],
-    );
-    let window_id = backend.launch(&opts).await.expect("launch should succeed");
+    let CmdResponse::WindowCreated(window_id) = backend
+        .execute(BackendCmd::Launch(LaunchCmd {
+            title: Some("original-title".to_string()),
+            command: vec!["sleep".to_string(), "60".to_string()],
+        }))
+        .await
+        .expect("launch should succeed") else { panic!("expected WindowCreated") };
 
     backend
-        .set_title(&window_id, "new-title")
+        .execute(BackendCmd::SetTitle(tai::backend::SetTitleCmd {
+            window: window_id.clone(),
+            title: "new-title".to_string(),
+        }))
         .await
         .expect("set_title should succeed");
 
-    let windows = backend.list_windows().await.expect("list should work");
+    let CmdResponse::Windows(windows) = backend
+        .execute(BackendCmd::List)
+        .await
+        .expect("list should work") else { panic!("expected Windows") };
     let found = windows
         .iter()
         .find(|w| w.id == window_id)
@@ -168,15 +201,17 @@ async fn process_watch_detects_exit() {
 
     let backend = spawn_backend().await;
 
-    let opts = LaunchOpts::new(
-        "test-watch".to_string(),
-        vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            "echo quick-exit".to_string(),
-        ],
-    );
-    let window_id = backend.launch(&opts).await.expect("launch should succeed");
+    let CmdResponse::WindowCreated(window_id) = backend
+        .execute(BackendCmd::Launch(LaunchCmd {
+            title: Some("test-watch".to_string()),
+            command: vec![
+                "bash".to_string(),
+                "-c".to_string(),
+                "echo quick-exit".to_string(),
+            ],
+        }))
+        .await
+        .expect("launch should succeed") else { panic!("expected WindowCreated") };
 
     let mut watch: ProcessWatch<KittyBackend> =
         ProcessWatch::new(backend, Duration::from_millis(200));

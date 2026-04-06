@@ -10,9 +10,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::time::Duration;
 
-use crate::types::LaunchOpts;
-
-use super::{BackendError, TerminalBackend, WindowId, WindowInfo};
+use super::{
+    BackendCmd, BackendError, CloseCmd, CmdResponse, GetTextCmd, LaunchCmd, SendKeysCmd,
+    SendTextCmd, SetTitleCmd, TerminalBackend, WindowId, WindowInfo,
+};
 
 const KITTY_BINARY: &str = "kitty";
 const SOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -138,10 +139,25 @@ impl KittyBackend {
 
 #[async_trait]
 impl TerminalBackend for KittyBackend {
-    async fn launch(&self, opts: &LaunchOpts) -> Result<WindowId, BackendError> {
+    async fn execute(&self, cmd: BackendCmd) -> Result<CmdResponse, BackendError> {
+        match cmd {
+            BackendCmd::Launch(c) => self.cmd_launch(&c).await.map(CmdResponse::WindowCreated),
+            BackendCmd::SendText(c) => self.cmd_send_text(&c).await.map(|()| CmdResponse::Ok),
+            BackendCmd::SendKeys(c) => self.cmd_send_keys(&c).await.map(|()| CmdResponse::Ok),
+            BackendCmd::GetText(c) => self.cmd_get_text(&c).await.map(CmdResponse::Text),
+            BackendCmd::Close(c) => self.cmd_close(&c).await.map(|()| CmdResponse::Ok),
+            BackendCmd::List => self.cmd_list().await.map(CmdResponse::Windows),
+            BackendCmd::SetTitle(c) => self.cmd_set_title(&c).await.map(|()| CmdResponse::Ok),
+        }
+    }
+}
+
+impl KittyBackend {
+    async fn cmd_launch(&self, cmd: &LaunchCmd) -> Result<WindowId, BackendError> {
+        let title = cmd.title.as_deref().unwrap_or("tai");
         let msg = LaunchCommand::new()
-            .args(opts.args.clone())
-            .window_title(&opts.title)
+            .args(cmd.command.clone())
+            .window_title(title)
             .hold(true)
             .keep_focus(true)
             .build()
@@ -176,9 +192,9 @@ impl TerminalBackend for KittyBackend {
         Ok(WindowId(window_id))
     }
 
-    async fn send_text(&self, window: &WindowId, text: &str) -> Result<(), BackendError> {
-        let match_spec = Self::match_by_id(window);
-        let data = format!("text:{text}");
+    async fn cmd_send_text(&self, cmd: &SendTextCmd) -> Result<(), BackendError> {
+        let match_spec = Self::match_by_id(&cmd.window);
+        let data = format!("text:{}", cmd.text);
 
         let msg = SendTextCommand::new(&data)
             .match_spec(&match_spec)
@@ -195,10 +211,10 @@ impl TerminalBackend for KittyBackend {
         Ok(())
     }
 
-    async fn send_keys(&self, window: &WindowId, keys: &str) -> Result<(), BackendError> {
-        let match_spec = Self::match_by_id(window);
+    async fn cmd_send_keys(&self, cmd: &SendKeysCmd) -> Result<(), BackendError> {
+        let match_spec = Self::match_by_id(&cmd.window);
 
-        let msg = SendKeyCommand::new(keys)
+        let msg = SendKeyCommand::new(&cmd.keys)
             .match_spec(&match_spec)
             .build()
             .map_err(|e| BackendError::SendFailed(format!("build send-key: {e}")))?;
@@ -213,8 +229,8 @@ impl TerminalBackend for KittyBackend {
         Ok(())
     }
 
-    async fn get_text(&self, window: &WindowId) -> Result<String, BackendError> {
-        let match_spec = Self::match_by_id(window);
+    async fn cmd_get_text(&self, cmd: &GetTextCmd) -> Result<String, BackendError> {
+        let match_spec = Self::match_by_id(&cmd.window);
 
         let msg = GetTextCommand::new()
             .match_spec(&match_spec)
@@ -250,8 +266,8 @@ impl TerminalBackend for KittyBackend {
         Ok(text)
     }
 
-    async fn close(&self, window: &WindowId) -> Result<(), BackendError> {
-        let match_spec = Self::match_by_id(window);
+    async fn cmd_close(&self, cmd: &CloseCmd) -> Result<(), BackendError> {
+        let match_spec = Self::match_by_id(&cmd.window);
 
         let msg = CloseWindowCommand::new()
             .match_spec(&match_spec)
@@ -268,7 +284,7 @@ impl TerminalBackend for KittyBackend {
         Ok(())
     }
 
-    async fn list_windows(&self) -> Result<Vec<WindowInfo>, BackendError> {
+    async fn cmd_list(&self) -> Result<Vec<WindowInfo>, BackendError> {
         let msg = LsCommand::new()
             .build()
             .map_err(|e| BackendError::Communication(format!("build ls: {e}")))?;
@@ -309,10 +325,10 @@ impl TerminalBackend for KittyBackend {
         Ok(result)
     }
 
-    async fn set_title(&self, window: &WindowId, title: &str) -> Result<(), BackendError> {
-        let match_spec = Self::match_by_id(window);
+    async fn cmd_set_title(&self, cmd: &SetTitleCmd) -> Result<(), BackendError> {
+        let match_spec = Self::match_by_id(&cmd.window);
 
-        let msg = SetWindowTitleCommand::new(title)
+        let msg = SetWindowTitleCommand::new(&cmd.title)
             .match_spec(&match_spec)
             .build()
             .map_err(|e| BackendError::Communication(format!("build set-window-title: {e}")))?;
