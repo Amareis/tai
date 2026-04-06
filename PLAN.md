@@ -26,25 +26,25 @@
 - [x] Интеграционные тесты с реальным Kitty (требует Kitty в CI/dev)
 - [x] Doc-комментарии для KittyBackend + ProcessWatch
 
-### Phase 2: Unix Socket + Minimal Dual Interface
+### Phase 2: Unix Socket + Minimal Dual Interface ✅
 
-Цель: `tai server` → Kitty открывается → оба интерфейса работают.
+Цель: `tai server` → Kitty открывается → оба интерфейа работают.
 
-- [ ] `client/mod.rs` — Unix Domain Socket server (в kernel) + client
+- [x] `client/mod.rs` — Unix Domain Socket server (в kernel) + client
     - Server: listen на сокете, accept, newline-delimited text protocol
     - Client: connect, stdin→socket (строки ввода), socket→stdout (строки вывода)
     - Client — ~50 строк, rustyline-async ↔ socket proxy (история команд, навигация по словам)
-- [ ] `client/model_view.rs` — текстовый вывод в socket
+- [x] `client/model_view.rs` — текстовый вывод в socket
     - State header (окна, токены, focus) — просто строки текста
     - НЕ ratatui, НЕ ANSI форматирование — просто writeln в socket
     - Новые строки дописываются, никаких clear screen
-- [ ] Обновить `main.rs` — clap subcommands:
+- [x] Обновить `main.rs` — clap subcommands:
     - `tai server [--socket PATH] [--hidden]` — ratatui User Viewport на stdout,
       spawn Kitty с `kitty -- tai client --socket PATH`, ждёт socket connection
     - `tai client --socket PATH` — подключиться к сокету, stdin↔socket↔stdout, sleep
-- [ ] User Viewport: минимальный ratatui — "TAI Server (User Viewport)"
-- [ ] Model Channel: "TAI Model Workspace" через socket
-- [ ] **Checkpoint**: запускаю `tai server` → Kitty открывается → оба окна показывают текст → набираю текст в Kitty → server получает строку
+- [x] User Viewport: минимальный ratatui — "TAI Server (User Viewport)"
+- [x] Model Channel: "TAI Model Workspace" через socket
+- [x] **Checkpoint**: запускаю `tai server` → Kitty открывается → оба окна показывают текст → набираю текст в Kitty → server получает строку
 - [ ] Doc-комментарии
 
 ### Phase 3: Command Parser + Window Operations

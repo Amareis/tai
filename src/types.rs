@@ -40,14 +40,17 @@ pub enum WindowState {
 }
 
 impl WindowState {
+    #[must_use]
     pub fn is_active(&self) -> bool {
         matches!(self, WindowState::Active { .. })
     }
 
+    #[must_use]
     pub fn is_frozen(&self) -> bool {
         matches!(self, WindowState::Frozen { .. })
     }
 
+    #[must_use]
     pub fn exit_code(&self) -> Option<i32> {
         match self {
             WindowState::Active { .. } => None,
@@ -78,6 +81,7 @@ pub struct Window {
 }
 
 impl Window {
+    #[must_use]
     pub fn new_active(backend_id: String, pid: u32, title: String) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -108,6 +112,7 @@ pub struct Session {
 }
 
 impl Session {
+    #[must_use]
     pub fn new(id: String, mind_path: PathBuf) -> Self {
         Self {
             id,
@@ -124,6 +129,7 @@ impl Session {
         self.windows.iter().filter(|w| w.focused)
     }
 
+    #[must_use]
     pub fn find_window(&self, id: &str) -> Option<&Window> {
         self.windows.iter().find(|w| w.id == id)
     }
@@ -146,6 +152,7 @@ pub struct LaunchOpts {
 }
 
 impl LaunchOpts {
+    #[must_use]
     pub fn new(title: String, args: Vec<String>) -> Self {
         Self { title, args }
     }
@@ -165,8 +172,8 @@ pub enum BlockMode {
 /// Команда управления ядра TAI.
 ///
 /// Модель отправляет эти команды через `tai:cmd` code blocks.
-/// Ядро парсит, валидирует (window_id должен существовать) и dispatch'ит
-/// через TerminalBackend.
+/// Ядро парсит, валидирует (`window_id` должен существовать) и dispatch'ит
+/// через `TerminalBackend`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum TaiCommand {
@@ -210,7 +217,7 @@ pub enum ParsedSegment {
 /// Триггер определяет, что запускает новый тик.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TickTrigger {
-    /// Терминальное окно завершилось (at_prompt == true)
+    /// Терминальное окно завершилось (`at_prompt` == true)
     WindowExited { window_id: String, exit_code: i32 },
     /// Пользователь написал сообщение в TUI chat
     UserMessage,

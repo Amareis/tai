@@ -15,7 +15,7 @@ pub struct WindowExitedEvent {
 /// Process watch — периодический опрос backend для обнаружения завершившихся окон.
 ///
 /// Kitty запускает окна с `--hold`, поэтому при завершении процесса окно переходит
-/// в состояние "at prompt". ProcessWatch опрашивает `list_windows` каждые `poll_interval`
+/// в состояние "at prompt". `ProcessWatch` опрашивает `list_windows` каждые `poll_interval`
 /// и для окон с `at_prompt == true`:
 /// 1. Захватывает содержимое через `get_text`
 /// 2. Закрывает окно через `close`
@@ -137,8 +137,8 @@ mod tests {
     use crate::backend::{BackendError, WindowInfo};
     use crate::types::LaunchOpts;
     use async_trait::async_trait;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Clone)]
     struct MockBackend {
@@ -184,18 +184,10 @@ mod tests {
         async fn launch(&self, _opts: &LaunchOpts) -> Result<WindowId, BackendError> {
             Ok(WindowId("mock-1".to_string()))
         }
-        async fn send_text(
-            &self,
-            _window: &WindowId,
-            _text: &str,
-        ) -> Result<(), BackendError> {
+        async fn send_text(&self, _window: &WindowId, _text: &str) -> Result<(), BackendError> {
             Ok(())
         }
-        async fn send_keys(
-            &self,
-            _window: &WindowId,
-            _keys: &str,
-        ) -> Result<(), BackendError> {
+        async fn send_keys(&self, _window: &WindowId, _keys: &str) -> Result<(), BackendError> {
             Ok(())
         }
         async fn get_text(&self, window: &WindowId) -> Result<String, BackendError> {
@@ -224,11 +216,7 @@ mod tests {
                 })
                 .collect())
         }
-        async fn set_title(
-            &self,
-            _window: &WindowId,
-            _title: &str,
-        ) -> Result<(), BackendError> {
+        async fn set_title(&self, _window: &WindowId, _title: &str) -> Result<(), BackendError> {
             Ok(())
         }
     }

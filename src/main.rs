@@ -16,7 +16,7 @@ enum Cli {
         hidden: bool,
 
         #[arg(long)]
-        debug: bool
+        debug: bool,
     },
 
     /// Run inside Kitty — pass stdin/stdout FD to server
@@ -26,7 +26,7 @@ enum Cli {
         socket: String,
 
         #[arg(long)]
-        debug: bool
+        debug: bool,
     },
 }
 
@@ -35,7 +35,11 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli {
-        Cli::Server { socket, hidden, debug } => {
+        Cli::Server {
+            socket,
+            hidden,
+            debug,
+        } => {
             if let Err(e) = tai::run_server(socket.map(PathBuf::from), hidden, debug).await {
                 eprintln!("error: {e}");
                 std::process::exit(1);

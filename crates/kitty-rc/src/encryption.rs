@@ -1,7 +1,7 @@
 use crate::error::{EncryptionError, KittyError};
 use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit},
     Aes256Gcm,
+    aead::{Aead, AeadCore, KeyInit},
 };
 use rand_core::OsRng;
 use sha2::{Digest, Sha256};
@@ -51,10 +51,12 @@ impl Encryptor {
 
     fn bytes_to_public_key(key_bytes: &[u8]) -> Result<PublicKey, EncryptionError> {
         let mut key_array = [0u8; 32];
-        key_array.copy_from_slice(key_bytes.get(..32).ok_or(EncryptionError::PublicKeyTooShort {
-            expected: 32,
-            actual: key_bytes.len(),
-        })?);
+        key_array.copy_from_slice(key_bytes.get(..32).ok_or(
+            EncryptionError::PublicKeyTooShort {
+                expected: 32,
+                actual: key_bytes.len(),
+            },
+        )?);
         Ok(PublicKey::from(key_array))
     }
 

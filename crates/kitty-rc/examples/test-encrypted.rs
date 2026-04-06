@@ -1,4 +1,4 @@
-use kitty_rc::{Kitty};
+use kitty_rc::Kitty;
 use std::error::Error;
 
 #[tokio::main]
@@ -21,8 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test sending a simple command
     use kitty_rc::command::CommandBuilder;
 
-    let cmd = CommandBuilder::new("ls")
-        .build();
+    let cmd = CommandBuilder::new("ls").build();
 
     match kitty.execute(&cmd).await {
         Ok(response) => {
@@ -41,8 +40,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn read_password() -> Result<String, Box<dyn std::error::Error>> {
-    let password_file = format!("{}/.config/kitty/rc.password",
-        std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
+    let password_file = format!(
+        "{}/.config/kitty/rc.password",
+        std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+    );
     std::fs::read_to_string(&password_file)
         .map_err(Box::<dyn std::error::Error>::from)
         .map(|s| s.to_string())
@@ -71,16 +72,20 @@ fn find_kitty_socket() -> Result<String, Box<dyn std::error::Error>> {
         return Ok(sock);
     }
 
-    Err("Could not find kitty socket. Please ensure kitty is running with remote control enabled.".into())
+    Err(
+        "Could not find kitty socket. Please ensure kitty is running with remote control enabled."
+            .into(),
+    )
 }
 
 fn find_socket_in_dir(dir: &std::path::Path) -> Option<String> {
     if let Ok(entries) = dir.read_dir() {
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str()
-                && name.ends_with(".sock") {
-                    return Some(dir.join(name).to_string_lossy().to_string());
-                }
+                && name.ends_with(".sock")
+            {
+                return Some(dir.join(name).to_string_lossy().to_string());
+            }
         }
     }
     None

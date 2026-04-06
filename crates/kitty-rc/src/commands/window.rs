@@ -175,10 +175,7 @@ impl LsCommand {
         }
 
         if let Some(match_tab) = self.match_tab {
-            payload.insert(
-                "match_tab".to_string(),
-                Value::String(match_tab),
-            );
+            payload.insert("match_tab".to_string(), Value::String(match_tab));
         }
 
         if self.self_window {
@@ -262,10 +259,7 @@ impl SendTextCommand {
         }
 
         if let Some(match_tab) = self.match_tab {
-            payload.insert(
-                "match_tab".to_string(),
-                Value::String(match_tab),
-            );
+            payload.insert("match_tab".to_string(), Value::String(match_tab));
         }
 
         if self.all {
@@ -345,10 +339,7 @@ impl SendKeyCommand {
         }
 
         if let Some(match_tab) = self.match_tab {
-            payload.insert(
-                "match_tab".to_string(),
-                Value::String(match_tab),
-            );
+            payload.insert("match_tab".to_string(), Value::String(match_tab));
         }
 
         if self.all {
@@ -583,10 +574,7 @@ impl SelectWindowCommand {
         }
 
         if self.reactivate_prev_tab {
-            payload.insert(
-                "reactivate_prev_tab".to_string(),
-                Value::Bool(true),
-            );
+            payload.insert("reactivate_prev_tab".to_string(), Value::Bool(true));
         }
 
         Ok(CommandBuilder::new("select-window")
@@ -679,10 +667,7 @@ impl NewWindowCommand {
         }
 
         if let Some(window_type) = self.window_type {
-            payload.insert(
-                "window_type".to_string(),
-                Value::String(window_type),
-            );
+            payload.insert("window_type".to_string(), Value::String(window_type));
         }
 
         if self.new_tab {
@@ -690,10 +675,7 @@ impl NewWindowCommand {
         }
 
         if let Some(tab_title) = self.tab_title {
-            payload.insert(
-                "tab_title".to_string(),
-                Value::String(tab_title),
-            );
+            payload.insert("tab_title".to_string(), Value::String(tab_title));
         }
 
         Ok(CommandBuilder::new("new-window")
@@ -753,10 +735,7 @@ impl DetachWindowCommand {
         }
 
         if let Some(target_tab) = self.target_tab {
-            payload.insert(
-                "target_tab".to_string(),
-                Value::String(target_tab),
-            );
+            payload.insert("target_tab".to_string(), Value::String(target_tab));
         }
 
         if self.self_window {
@@ -1085,10 +1064,7 @@ impl CreateMarkerCommand {
         }
 
         if let Some(marker_spec) = self.marker_spec {
-            payload.insert(
-                "marker_spec".to_string(),
-                Value::String(marker_spec),
-            );
+            payload.insert("marker_spec".to_string(), Value::String(marker_spec));
         }
 
         Ok(CommandBuilder::new("create-marker")

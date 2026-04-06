@@ -1,6 +1,6 @@
 use std::time::Duration;
-use tai::backend::kitty::KittyBackend;
 use tai::backend::TerminalBackend;
+use tai::backend::kitty::KittyBackend;
 use tai::types::LaunchOpts;
 
 #[allow(clippy::expect_used)]
@@ -19,8 +19,14 @@ async fn spawn_connects_to_kitty() {
 #[tokio::test]
 async fn list_windows_returns_initial() {
     let backend = spawn_backend().await;
-    let windows = backend.list_windows().await.expect("list_windows should work");
-    assert!(!windows.is_empty(), "kitty should have at least one initial window");
+    let windows = backend
+        .list_windows()
+        .await
+        .expect("list_windows should work");
+    assert!(
+        !windows.is_empty(),
+        "kitty should have at least one initial window"
+    );
 }
 
 #[tokio::test]
@@ -29,11 +35,18 @@ async fn launch_creates_window() {
 
     let opts = LaunchOpts::new(
         "test-echo".to_string(),
-        vec!["bash".to_string(), "-c".to_string(), "echo hello-world".to_string()],
+        vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            "echo hello-world".to_string(),
+        ],
     );
     let window_id = backend.launch(&opts).await.expect("launch should succeed");
 
-    let windows = backend.list_windows().await.expect("list_windows should work");
+    let windows = backend
+        .list_windows()
+        .await
+        .expect("list_windows should work");
     let found = windows.iter().any(|w| w.id == window_id);
     assert!(found, "launched window should appear in list");
 }
@@ -44,17 +57,23 @@ async fn get_text_returns_content() {
 
     let opts = LaunchOpts::new(
         "test-text".to_string(),
-        vec!["bash".to_string(), "-c".to_string(), "echo marker-42".to_string()],
+        vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            "echo marker-42".to_string(),
+        ],
     );
     let window_id = backend.launch(&opts).await.expect("launch should succeed");
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let text = backend.get_text(&window_id).await.expect("get_text should work");
+    let text = backend
+        .get_text(&window_id)
+        .await
+        .expect("get_text should work");
     assert!(
         text.contains("marker-42"),
-        "get_text should contain output, got: {:?}",
-        text
+        "get_text should contain output, got: {text:?}",
     );
 }
 
@@ -62,10 +81,7 @@ async fn get_text_returns_content() {
 async fn send_text_to_window() {
     let backend = spawn_backend().await;
 
-    let opts = LaunchOpts::new(
-        "test-send".to_string(),
-        vec!["cat".to_string()],
-    );
+    let opts = LaunchOpts::new("test-send".to_string(), vec!["cat".to_string()]);
     let window_id = backend.launch(&opts).await.expect("launch should succeed");
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -76,11 +92,13 @@ async fn send_text_to_window() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let text = backend.get_text(&window_id).await.expect("get_text should work");
+    let text = backend
+        .get_text(&window_id)
+        .await
+        .expect("get_text should work");
     assert!(
         text.contains("hello-from-tai"),
-        "sent text should appear in window, got: {:?}",
-        text
+        "sent text should appear in window, got: {text:?}",
     );
 }
 
@@ -98,7 +116,10 @@ async fn close_window() {
     let had_window = before.iter().any(|w| w.id == window_id);
     assert!(had_window);
 
-    backend.close(&window_id).await.expect("close should succeed");
+    backend
+        .close(&window_id)
+        .await
+        .expect("close should succeed");
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -138,7 +159,11 @@ async fn process_watch_detects_exit() {
 
     let opts = LaunchOpts::new(
         "test-watch".to_string(),
-        vec!["bash".to_string(), "-c".to_string(), "echo quick-exit".to_string()],
+        vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            "echo quick-exit".to_string(),
+        ],
     );
     let window_id = backend.launch(&opts).await.expect("launch should succeed");
 
@@ -156,7 +181,10 @@ async fn process_watch_detects_exit() {
         }
     }
 
-    assert!(!events.is_empty(), "should detect at_prompt for exited window");
+    assert!(
+        !events.is_empty(),
+        "should detect at_prompt for exited window"
+    );
     assert!(
         events[0].content.contains("quick-exit"),
         "captured content should contain output, got: {:?}",

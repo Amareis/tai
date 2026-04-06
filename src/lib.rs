@@ -1,21 +1,16 @@
 pub mod backend;
+pub mod client;
 pub mod config;
-pub mod fd;
 pub mod types;
 
+use crossterm::event::{Event, KeyCode, KeyModifiers, read};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Paragraph;
+use ratatui::{init, restore};
 use std::env;
-use std::fs::File;
-use std::io::Write;
-use tokio::io::{self, AsyncBufReadExt, BufReader};
 use std::path::PathBuf;
 use std::time::Duration;
-use crossterm::event::{read, Event, KeyCode, KeyModifiers};
-use ratatui::{init, restore, DefaultTerminal};
-use tokio::sync::oneshot;
-use tokio::time::sleep;
 use tracing_subscriber::EnvFilter;
 
 /// Запуск TAI сервера: User viewport + Kitty + Model viewport.
@@ -35,44 +30,79 @@ pub async fn run_server(
     let uuid = uuid::Uuid::new_v4();
     let kitty_socket = env::temp_dir().join(format!("tai-kitty-{}.sock", &uuid));
 
-    let fd_socket = socket_path
-        .unwrap_or_else(|| env::temp_dir().join(PathBuf::from(format!("tai-{}.sock", &uuid))));
+    let client_socket =
+        socket_path.unwrap_or_else(|| env::temp_dir().join(format!("tai-{}.sock", &uuid)));
 
-    // Создаем канал: tx (отправитель), rx (получатель)
-    let (tx, rx) = oneshot::channel();
-    fd::recv_connection(fd_socket.clone(), tx);
+    let server = client::Server::bind(client_socket.clone()).await?;
 
     let bin_path = env::current_exe()?;
 
-    let args = vec![
-        if debug { "--hold" } else { "" },
-        bin_path.to_str().ok_or("invalid path")?,
-        "client",
-        if debug { "--debug" } else { "" },
-        "--socket",
-        fd_socket.to_str().ok_or("invalid socket path")?,
+    let mut args: Vec<String> = vec![
+        "--hold".to_string(),
+        bin_path.to_str().ok_or("invalid path")?.to_string(),
+        "client".to_string(),
+        "--socket".to_string(),
+        client_socket
+            .to_str()
+            .ok_or("invalid socket path")?
+            .to_string(),
     ];
+
+    if debug {
+        args.push("--debug".to_string());
+    }
+
+    let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
     let _kitty =
-        backend::kitty::KittyBackend::spawn(&args, Some(kitty_socket.clone()), hidden).await?;
+        backend::kitty::KittyBackend::spawn(&args_refs, Some(kitty_socket.clone()), hidden).await?;
 
     tracing::info!("kitty spawned, socket: {}", kitty_socket.display());
 
-    let mut model_file = rx.await??;
-    print_hello(&mut model_file);
+    let (mut conn, socket_path) = server.accept().await?;
+    tracing::info!("model client connected from {}", socket_path.display());
 
-    tracing::info!("model viewport initialized, drawing...");
+    conn.write_line("════════════════════════════════════════════════════════════")
+        .await?;
+    conn.write_line("STATE: Active 0 | Frozen 0 | Tokens: 0")
+        .await?;
+    conn.write_line("════════════════════════════════════════════════════════════")
+        .await?;
+    conn.write_line("").await?;
+    conn.write_line("TAI Server ready. Type commands in this window.")
+        .await?;
+    conn.write_line("").await?;
+    conn.write("> ").await?;
 
-    let _ = draw_hello(&mut tm).await;
+    tracing::info!("model viewport initialized");
+
+    tokio::spawn(async move {
+        loop {
+            match conn.read_line().await {
+                Ok(Some(line)) => {
+                    tracing::info!("received from model channel: {}", line);
+                    let _ = conn.write_line(&format!("Echo: {line}")).await;
+                    let _ = conn.write_line("> ").await;
+                }
+                Ok(None) => {
+                    tracing::info!("model channel closed");
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("error reading from model channel: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    draw_hello(&mut tm)?;
 
     restore();
     Ok(())
 }
 
-fn print_hello(out: &mut File) {
-    let _ = out.write_all("Model viewport\n".repeat(100).as_bytes());
-}
-
-/// Запуск TAI клиента внутри Kitty: передать FD и спать.
+/// Запуск TAI клиента внутри Kitty: текстовый протокол через Unix socket.
 pub async fn run_client(
     socket_path: PathBuf,
     _debug: bool,
@@ -82,34 +112,17 @@ pub async fn run_client(
         .init();
 
     tracing::info!("tai client starting, socket: {}", socket_path.display());
-    fd::send_connection(socket_path).await?;
-    let stdin = io::stdin();
-    let reader = BufReader::new(stdin);
-    let mut lines = reader.lines();
-
-    print!("Введите текст (exit для выхода):\n> ");
-
-    // Читаем строки в цикле по мере их поступления
-    while let Some(line) = lines.next_line().await? {
-        print!("Эхо: {}\n> ", line);
-
-        if line == "exit" {
-            break;
-        }
-    }
-
-    // tokio::signal::ctrl_c().await?;
-
+    client::run_client(socket_path).await?;
     Ok(())
 }
 
-async fn draw_hello(tm: &mut DefaultTerminal) -> Result<(), Box<dyn std::error::Error>> {
+fn draw_hello(tm: &mut ratatui::DefaultTerminal) -> Result<(), Box<dyn std::error::Error>> {
     let mut exit = false;
     while !exit {
         tm.draw(|f| {
             let area = Rect::new(0, 0, f.area().width, f.area().height);
             f.render_widget(
-                Paragraph::new("TAI Server (User Viewport)\n".repeat(5))
+                Paragraph::new("TAI Server (User Viewport)\n\nPress ESC or Ctrl+C to exit")
                     .style(Style::default().fg(Color::Green)),
                 area,
             );
@@ -123,12 +136,10 @@ async fn draw_hello(tm: &mut DefaultTerminal) -> Result<(), Box<dyn std::error::
                     exit = true;
                 }
             }
-            Event::Mouse(_mouse_event) => {
-
-            }
+            Event::Mouse(_) => exit = false,
             _ => {}
         }
-        sleep(Duration::from_millis(60)).await;
+        std::thread::sleep(Duration::from_millis(60));
     }
     Ok(())
 }

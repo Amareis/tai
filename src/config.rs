@@ -155,6 +155,7 @@ pub fn load(path: &std::path::Path) -> Result<Config, ConfigError> {
 }
 
 /// Загрузить конфигурацию, с fallback на defaults при отсутствии файла.
+#[must_use]
 pub fn load_or_default(path: &std::path::Path) -> Config {
     load(path).unwrap_or_default()
 }

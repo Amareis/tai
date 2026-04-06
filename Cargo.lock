@@ -1103,15 +1103,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "passfd"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b332c50e4d07c0011fff51ea305374408319908908bc1dbed7a0ffaaf63a8151"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "pest"
 version = "2.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1418,18 +1409,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
-name = "roam-fdpass"
-version = "7.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdb94b550009be64d0cf83300be56201e8c0300e49d30cbd5ebd5625ad650926"
-dependencies = [
- "libc",
- "passfd",
- "tokio",
- "windows-sys",
-]
-
-[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1677,7 +1656,6 @@ dependencies = [
  "crossterm",
  "kitty-rc",
  "ratatui",
- "roam-fdpass",
  "serde",
  "serde_json",
  "tempfile",

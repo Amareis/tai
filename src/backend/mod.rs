@@ -15,7 +15,7 @@ impl fmt::Display for WindowId {
     }
 }
 
-/// Информация об окне, возвращаемая backend при list_windows.
+/// Информация об окне, возвращаемая backend при `list_windows`.
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
     pub id: WindowId,
