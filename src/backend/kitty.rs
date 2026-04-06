@@ -3,6 +3,7 @@ use kitty_rc::{
     CloseWindowCommand, GetTextCommand, Kitty, KittyBuilder, LaunchCommand, LsCommand,
     SendKeyCommand, SendTextCommand, SetWindowTitleCommand,
 };
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
@@ -26,7 +27,6 @@ const SOCKET_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 /// предотвращает потерю вывода при завершении процесса.
 pub struct KittyBackend {
     client: Mutex<Kitty>,
-    socket_path: PathBuf,
 
     #[allow(dead_code)]
     child: Option<Child>,
@@ -41,13 +41,9 @@ impl KittyBackend {
     /// Метод ждёт появления socket-файла (до `SOCKET_CONNECT_TIMEOUT`).
     pub async fn spawn(
         run_cmd: &[&str],
-        socket_path: Option<PathBuf>,
+        socket_path: &PathBuf,
         hidden: bool,
     ) -> Result<Self, BackendError> {
-        let socket_path = socket_path.unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("tai-kitty-{}.sock", uuid::Uuid::new_v4()))
-        });
-
         let mut cmd = Command::new(KITTY_BINARY);
 
         cmd.kill_on_drop(true)
@@ -56,7 +52,7 @@ impl KittyBackend {
             .arg("-o")
             .arg("allow_remote_control=yes")
             .arg("--listen-on")
-            .arg(format!("unix:{}", socket_path.display()));
+            .arg([OsStr::new("unix:"), socket_path.as_os_str()].join(OsStr::new("")));
 
         if hidden {
             cmd.arg("--start-as=hidden");
@@ -76,18 +72,12 @@ impl KittyBackend {
             }
         })?;
 
-        let client = Self::wait_for_socket(&socket_path).await?;
+        let client = Self::wait_for_socket(socket_path).await?;
 
         Ok(Self {
             client: Mutex::new(client),
             child: Some(child),
-            socket_path,
         })
-    }
-
-    /// Путь к socket, через который идёт связь.
-    pub fn socket_path(&self) -> &PathBuf {
-        &self.socket_path
     }
 
     async fn wait_for_socket(socket_path: &PathBuf) -> Result<Kitty, BackendError> {

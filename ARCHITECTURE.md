@@ -280,7 +280,7 @@ tai/
 │   │   ├── kitty.rs            # KittyBackend (kitty-rc)
 │   │   └── watch.rs            # ProcessWatch: poll at_prompt
 │   │
-│   ├── client/                 # Unix socket server/client для Model Channel
+│   ├── core/                 # Unix socket server/client для Model Channel
 │   │   ├── mod.rs              # Socket server (в kernel), socket client (~30 строк)
 │   │   └── model_view.rs       # Потоковый текстовый вывод: строки в socket
 │   │
@@ -336,8 +336,8 @@ Doc-комментарии и определения типов — в исхо�
 - [`src/types.rs`](src/types.rs) — `WindowState`, `Window`, `Session`, `LaunchOpts`, `BlockMode`, `TaiCommand`, `ParsedSegment`, `TickTrigger`
 - [`src/backend/mod.rs`](src/backend/mod.rs) — `TerminalBackend` trait, `WindowId`, `WindowInfo`, `BackendError`
 - [`src/config.rs`](src/config.rs) — `Config`, `KernelConfig`, `ModelConfig`, `SessionConfig`, `BackendConfig`
-- [`src/client/mod.rs`](src/client/mod.rs) — Unix socket server/client для Model Channel
-- [`src/client/model_view.rs`](src/client/model_view.rs) — plain text рендер Model Channel
+- [`src/core/mod.rs`](src/core/mod.rs) — Unix socket server/client для Model Channel
+- [`src/core/model_view.rs`](src/core/model_view.rs) — plain text рендер Model Channel
 
 ---
 
@@ -364,25 +364,25 @@ tai client --socket PATH
 
 ## Термины
 
-| Термин | Значение |
-|--------|----------|
-| L-Model | Большая модель (Claude, GPT) |
-| S-Model | Лёгкая модель-наблюдатель (отложено) |
-| Terminal Session | Реальная PTY-сессия |
-| Window | Объект в памяти ядра — Active/Frozen/Archived |
-| Mind | Файл `mind.md` — память + thinking |
-| Dashboard | Список окон с состояниями |
-| Tick | Один цикл assemble → invoke → parse → execute → wait |
-| Focus | Окно развёрнуто в промпте |
-| Summarize | Окно свёрнуто |
-| Frozen | Снимок завершённого процесса |
-| Write Target | Окно куда пишется ввод |
-| Block | ` ```<window-id>:<mode> ` — обязательные параметры |
-| Prose | Текст вне блоков → чат |
-| Observation | Содержимое окна как user message |
-| Trigger | at_prompt / user message / idle timeout |
-| Backend | TerminalBackend trait |
-| TAI Command | Команда ядра (launch/close/focus) |
-| User Viewport | Терминал человека — ratatui dashboard + debug |
-| Model Channel | Kitty окно — plain text через Unix socket, чат + команды |
-| tai client | readline↔socket proxy (~50 строк, rustyline: история, навигация по словам) |
+| Термин | Значение                                                                     |
+|--------|------------------------------------------------------------------------------|
+| L-Model | Большая модель (Claude, GPT)                                                 |
+| S-Model | Лёгкая модель-наблюдатель (отложено)                                         |
+| Terminal Session | Реальная PTY-сессия                                                          |
+| Window | Объект в памяти ядра — Active/Frozen/Archived                                |
+| Mind | Файл `mind.md` — память + thinking                                           |
+| Dashboard | Список окон с состояниями                                                    |
+| Tick | Один цикл assemble → invoke → parse → execute → wait                         |
+| Focus | Окно развёрнуто в промпте                                                    |
+| Summarize | Окно свёрнуто                                                                |
+| Frozen | Снимок завершённого процесса                                                 |
+| Write Target | Окно куда пишется ввод                                                       |
+| Block | ` ```<window-id>:<mode> ` — обязательные параметры                           |
+| Prose | Текст вне блоков → чат                                                       |
+| Observation | Содержимое окна как user message                                             |
+| Trigger | at_prompt / user message / idle timeout                                      |
+| Backend | TerminalBackend trait                                                        |
+| TAI Command | Команда ядра (launch/close/focus)                                            |
+| User Viewport | Терминал человека — ratatui dashboard + debug                                |
+| Model Channel | Kitty окно — plain text через Unix socket, чат + команды                     |
+| tai client | readline ↔ socket proxy (~50 строк, rustyline: история, навигация по словам) |

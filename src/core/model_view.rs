@@ -1,22 +1,22 @@
-use super::ServerConnection;
+use super::Connection;
 
 pub struct ModelView {
-    conn: ServerConnection,
+    conn: Connection,
 }
 
 impl ModelView {
     #[must_use]
-    pub fn new(conn: ServerConnection) -> Self {
+    pub fn new(conn: Connection) -> Self {
         Self { conn }
     }
 
     pub async fn write_state_header(
-        &self,
+        &mut self,
         active_windows: usize,
         frozen_windows: usize,
         tokens: usize,
         focus: Option<&str>,
-    ) -> Result<(), super::ClientError> {
+    ) -> Result<(), super::CoreError> {
         let separator = "═".repeat(60);
         self.conn.write_line(&separator).await?;
 
@@ -37,11 +37,11 @@ impl ModelView {
     }
 
     pub async fn write_command_result(
-        &self,
+        &mut self,
         window_name: &str,
         output: &str,
         exit_code: Option<i32>,
-    ) -> Result<(), super::ClientError> {
+    ) -> Result<(), super::CoreError> {
         self.conn.write_line(&format!("[{window_name}]")).await?;
         self.conn.write_line(output).await?;
 
@@ -53,22 +53,22 @@ impl ModelView {
         Ok(())
     }
 
-    pub async fn write_prompt(&self) -> Result<(), super::ClientError> {
+    pub async fn write_prompt(&mut self) -> Result<(), super::CoreError> {
         self.conn.write_line("> ").await?;
         Ok(())
     }
 
-    pub async fn write_text(&self, text: &str) -> Result<(), super::ClientError> {
+    pub async fn write_text(&mut self, text: &str) -> Result<(), super::CoreError> {
         self.conn.write_line(text).await?;
         Ok(())
     }
 
-    pub async fn write_empty_line(&self) -> Result<(), super::ClientError> {
+    pub async fn write_empty_line(&mut self) -> Result<(), super::CoreError> {
         self.conn.write_line("").await?;
         Ok(())
     }
 
-    pub fn connection(&mut self) -> &mut ServerConnection {
+    pub fn connection(&mut self) -> &mut Connection {
         &mut self.conn
     }
 }

@@ -1,19 +1,30 @@
+use std::path::PathBuf;
 use std::time::Duration;
 use tai::backend::TerminalBackend;
 use tai::backend::kitty::KittyBackend;
 use tai::types::LaunchOpts;
 
 #[allow(clippy::expect_used)]
+async fn spawn_backend_with_path() -> (KittyBackend, PathBuf) {
+    let socket_path =
+        std::env::temp_dir().join(format!("test-kitty-{}.sock", uuid::Uuid::new_v4()));
+
+    (
+        KittyBackend::spawn(&[], &socket_path, true)
+            .await
+            .expect("kitty should be available in PATH"),
+        socket_path,
+    )
+}
+
 async fn spawn_backend() -> KittyBackend {
-    KittyBackend::spawn(&[], None, true)
-        .await
-        .expect("kitty should be available in PATH")
+    spawn_backend_with_path().await.0
 }
 
 #[tokio::test]
 async fn spawn_connects_to_kitty() {
-    let backend = spawn_backend().await;
-    assert!(backend.socket_path().exists());
+    let (_back, socket_path) = spawn_backend_with_path().await;
+    assert!(socket_path.exists());
 }
 
 #[tokio::test]
