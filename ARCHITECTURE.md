@@ -87,17 +87,52 @@ FOCUS: build (bash, pid 1234)
 - Хотим поменять Kitty на tmux → не переписываем промпты
 - Хотим remote → модель не должна знать про SSH
 
+### Pipeline: clap → enum → execute
+
+Человек (и модель через code blocks) пишет текстовые команды. Clap парсит строку в `BackendCmd` enum.
+Ошибка парсинга → сразу feedback, даже до backend'а не доходит. Успех → `backend.execute(cmd)`.
+
+```
+строка → clap::try_parse_from() → BackendCmd → backend.execute(cmd) → Result<CmdResponse>
+```
+
+### BackendCmd
+
 ```rust
-trait TerminalBackend {
-    async fn launch(&self, opts: LaunchOpts) -> Result<WindowId>;
-    async fn send_text(&self, window: &WindowId, text: &str) -> Result<()>;
-    async fn send_keys(&self, window: &WindowId, keys: &str) -> Result<()>;
-    async fn get_text(&self, window: &WindowId) -> Result<String>;
-    async fn close(&self, window: &WindowId) -> Result<()>;
-    async fn list_windows(&self) -> Result<Vec<WindowInfo>>;
-    async fn set_title(&self, window: &WindowId, title: &str) -> Result<()>;
+enum BackendCmd {
+    Launch { title: Option<String>, command: String },
+    SendText { window: WindowId, text: String },
+    SendKeys { window: WindowId, keys: String },
+    GetText { window: WindowId },
+    Close { window: WindowId },
+    List,
+    SetTitle { window: WindowId, title: String },
 }
 ```
+
+### TerminalBackend trait
+
+```rust
+trait TerminalBackend {
+    async fn execute(&self, cmd: BackendCmd) -> Result<CmdResponse>;
+}
+```
+
+Один метод, одна точка входа. Реализация внутри может раскидывать по приватным методам — это её дело.
+
+### Clap subcommands для текстового ввода
+
+```
+launch [--title NAME] -- <command>     # запустить окно
+send <window> <text...>                # отправить текст (stdin)
+keys <window> <keys...>                # отправить клавиши
+get <window>                           # получить содержимое
+close <window>                         # закрыть окно
+list                                   # список окон
+title <window> <title>                 # установить заголовок
+```
+
+Тот же clap что и для `tai server`/`tai client` — reuse зависимость.
 
 Реализации: `KittyBackend` (kitty-rc), `TmuxBackend` (future), `RemoteBackend` (future).
 
@@ -299,8 +334,7 @@ tai/
 │   │
 │   ├── routing/
 │   │   ├── mod.rs
-│   │   ├── parser.rs           # parse_blocks(): window:mode + tai:cmd
-│   │   └── tai_command.rs      # парсер команд ядра
+│   │   └── parser.rs           # clap subcommands → BackendCmd (и code blocks для модели)
 │   │
 │   ├── tui/                    # ratatui User Viewport (один terminal)
 │   │   ├── mod.rs              # Terminal setup, event loop
@@ -333,8 +367,8 @@ tai/
 
 Doc-комментарии и определения типов — в исходниках:
 
-- [`src/types.rs`](src/types.rs) — `WindowState`, `Window`, `Session`, `LaunchOpts`, `BlockMode`, `TaiCommand`, `ParsedSegment`, `TickTrigger`
-- [`src/backend/mod.rs`](src/backend/mod.rs) — `TerminalBackend` trait, `WindowId`, `WindowInfo`, `BackendError`
+- [`src/types.rs`](src/types.rs) — `WindowState`, `Window`, `Session`, `LaunchOpts`, `BlockMode`, `ParsedSegment`, `TickTrigger`
+- [`src/backend/mod.rs`](src/backend/mod.rs) — `TerminalBackend` trait, `BackendCmd` enum, `CmdResponse`, `WindowId`, `WindowInfo`, `BackendError`
 - [`src/config.rs`](src/config.rs) — `Config`, `KernelConfig`, `ModelConfig`, `SessionConfig`, `BackendConfig`
 - [`src/core/mod.rs`](src/core/mod.rs) — Unix socket server/client для Model Channel
 - [`src/core/model_view.rs`](src/core/model_view.rs) — plain text рендер Model Channel

@@ -51,17 +51,22 @@
 
 Цель: печатаю `launch bash` в Kitty окно → появляется новое окно → вижу в User Viewport.
 
-- [ ] `routing/parser.rs` — парсинг текстовых команд из Model Channel
-    - Формат: `launch --title name -- cmd args`, `close <window-id>`, `focus <window-id>`,
-      `list`, `send <window-id> text...`
-    - Простой line-based парсер (не code blocks — это для модели, человек пишет plain commands)
-- [ ] `routing/tai_command.rs` — TaiCommand enum, парсер команд
-- [ ] Чтение ввода из Model Channel (socket lines → command parser → dispatch)
-- [ ] Dispatch: tai_command → backend calls (launch, close, send-text, list-windows, get-text)
+- [ ] `backend/mod.rs` — `BackendCmd` enum + `CmdResponse` enum
+    - BackendCmd: Launch, SendText, SendKeys, GetText, Close, List, SetTitle
+    - CmdResponse: WindowCreated(WindowId), Text(String), Windows(Vec<WindowInfo>), Ok, Error(String)
+    - Убираем команды из src/types.rs
+- [ ] Обновить `TerminalBackend` trait: один метод `async fn execute(&self, cmd: BackendCmd) -> Result<CmdResponse>`
+- [ ] `routing/parser.rs` — clap-based парсер текстовых команд из Model Channel
+    - Reuse clap (уже в зависимостях для `tai server`/`tai client`)
+    - Subcommands: `launch [--title NAME] -- <cmd>`, `send <window> <text...>`, `keys <window> <keys...>`, `get <window>`, `close <window>`, `list`, `title <window> <title>`
+    - `clap::try_parse_from()` → `BackendCmd` или сразу error feedback
+    - Pipeline: строка → clap → BackendCmd → backend.execute(cmd) → текст в socket
+- [ ] Чтение ввода из Model Channel (socket lines → clap parser → dispatch)
+- [ ] Dispatch: BackendCmd → backend.execute() (единый метод trait'а)
 - [ ] User Viewport: список окон (обновляется после каждой команды)
-- [ ] Model Channel: результат команды (text feedback: "launched window abc123")
+- [ ] Model Channel: результат команды (текстовый feedback: "launched window abc123")
 - [ ] **Checkpoint**: в Kitty окне набираю `launch bash` → появляется Kitty tab → `list` → вижу оба окна → `close 1` → окно закрылось
-- [ ] Тесты парсера (валидные/невалидные команды)
+- [ ] Тесты парсера (валидные/невалидные команды, clap error messages)
 - [ ] Doc-комментарии
 
 ### Phase 4: Window Lifecycle + Session Persistence
