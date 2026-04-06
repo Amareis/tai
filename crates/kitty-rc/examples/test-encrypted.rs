@@ -2,7 +2,7 @@ use kitty_rc::Kitty;
 use std::error::Error;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn Error>> {
     // Find kitty socket
     let socket_path = find_kitty_socket()?;
 
@@ -39,17 +39,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn read_password() -> Result<String, Box<dyn std::error::Error>> {
+fn read_password() -> Result<String, Box<dyn Error>> {
     let password_file = format!(
         "{}/.config/kitty/rc.password",
         std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
     );
     std::fs::read_to_string(&password_file)
-        .map_err(Box::<dyn std::error::Error>::from)
+        .map_err(Box::<dyn Error>::from)
         .map(|s| s.to_string())
 }
 
-fn find_kitty_socket() -> Result<String, Box<dyn std::error::Error>> {
+fn find_kitty_socket() -> Result<String, Box<dyn Error>> {
     // Try XDG runtime directory first
     if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
         let dir = std::path::Path::new(&runtime).join("kitty");

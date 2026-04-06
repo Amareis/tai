@@ -257,7 +257,7 @@ impl KittyBackend {
                 if let Some(obj) = d.as_object()
                     && let Some(text_val) = obj.get("text")
                 {
-                    return text_val.as_str().map(std::string::ToString::to_string);
+                    return text_val.as_str().map(ToString::to_string);
                 }
                 None
             })

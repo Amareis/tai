@@ -138,7 +138,7 @@ impl<B: TerminalBackend> ProcessWatch<B> {
     pub async fn run<F, Fut>(&mut self, handler: F) -> Result<(), BackendError>
     where
         F: Fn(WindowExitedEvent) -> Fut,
-        Fut: std::future::Future<Output = ()>,
+        Fut: Future<Output = ()>,
     {
         let mut interval = time::interval(self.poll_interval);
 
