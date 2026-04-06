@@ -40,7 +40,7 @@ pub enum CoreError {
 
 pub struct Server<Back: TerminalBackend> {
     client: Connection,
-    tui: DefaultTerminal,
+    tui: Option<DefaultTerminal>,
     back: Back,
 }
 
@@ -57,7 +57,7 @@ pub async fn bind(socket_path: &PathBuf) -> Result<(UnixListener, RmFileOnDrop),
 
 impl<Back: TerminalBackend> Server<Back> {
     pub async fn accept(
-        tui: DefaultTerminal,
+        tui: Option<DefaultTerminal>,
         back: Back,
         unix_listener: &UnixListener,
     ) -> Result<Self, CoreError> {
@@ -97,14 +97,16 @@ impl<Back: TerminalBackend> Server<Back> {
         let mut events = EventStream::new();
 
         while !exit {
-            tui.draw(|f| {
-                let area = Rect::new(0, 0, f.area().width, f.area().height);
-                f.render_widget(
-                    Paragraph::new("TAI Server (User Viewport)\n\nPress ESC or Ctrl+C to exit")
-                        .style(Style::default().fg(Color::Green)),
-                    area,
-                );
-            })?;
+            if let Some(tm) = tui {
+                let _ = tm.draw(|f| {
+                    let area = Rect::new(0, 0, f.area().width, f.area().height);
+                    f.render_widget(
+                        Paragraph::new("TAI Server (User Viewport)\n\nPress ESC or Ctrl+C to exit")
+                            .style(Style::default().fg(Color::Green)),
+                        area,
+                    );
+                });
+            }
             let event = events.next().fuse();
             select! {
                 tui_event = event => {

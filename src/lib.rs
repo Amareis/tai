@@ -28,8 +28,11 @@ pub async fn run_server(
         .with_env_filter(EnvFilter::from_default_env().add_directive("tai=info".parse()?))
         .init();
 
-    let tm = init();
-    let _restore = RestoreTerm;
+    let (tm, _restore) = if debug {
+        (None, None)
+    } else {
+        (Some(init()), Some(RestoreTerm))
+    };
 
     let uuid = uuid::Uuid::new_v4();
     let kitty_socket = env::temp_dir().join(format!("tai-kitty-{}.sock", &uuid));
