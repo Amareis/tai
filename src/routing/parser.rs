@@ -1,5 +1,6 @@
+use clap::CommandFactory;
 use clap::{Parser, Subcommand};
-
+use clap::error::ErrorKind;
 use crate::backend::{
     BackendCmd, CloseCmd, GetTextCmd, LaunchCmd, SendKeysCmd, SendTextCmd, SetTitleCmd, WindowId,
 };
@@ -8,16 +9,21 @@ use crate::backend::{
 pub enum ParseError {
     #[error("failed to parse command: {0}")]
     Clap(#[from] clap::Error),
+    #[error("{0}")]
+    Help(String),
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "tai", no_binary_name = true)]
+#[command(name = "tai")]
+#[command(multicall = true)]
+#[command(disable_help_flag = true)]
 struct TaiCli {
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand, Debug)]
+#[command(disable_help_flag = false)]
 enum Commands {
     Launch {
         #[arg(short, long)]
@@ -52,18 +58,27 @@ enum Commands {
 pub fn parse(input: &str) -> Result<BackendCmd, ParseError> {
     let args = shell_words::split(input).map_err(|e| {
         clap::Error::raw(
-            clap::error::ErrorKind::InvalidValue,
+            ErrorKind::InvalidValue,
             format!("shell parsing failed: {e}"),
         )
     })?;
 
-    let cli = TaiCli::try_parse_from(args)?;
+    let cli = match TaiCli::try_parse_from(args) {
+        Ok(cli) => Ok(cli),
+        Err(e) => Err(
+            if e.kind() == ErrorKind::DisplayHelp {
+                ParseError::Help(TaiCli::command().render_long_help().to_string())
+            } else {
+                ParseError::Clap(e)
+            }
+        )
+    }?;
 
     Ok(match cli.command {
         Commands::Launch { title, command } => {
             if command.is_empty() {
                 return Err(ParseError::Clap(clap::Error::raw(
-                    clap::error::ErrorKind::MissingRequiredArgument,
+                    ErrorKind::MissingRequiredArgument,
                     "launch requires a command after --",
                 )));
             }
@@ -194,5 +209,21 @@ mod tests {
     fn test_launch_missing_command() {
         let result = parse("launch --title foo");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_help_subcommand() {
+        let result = parse("help");
+        assert!(matches!(result, Err(ParseError::Help(_))));
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("help"));
+    }
+
+    #[test]
+    fn test_help_with_arg() {
+        let result = parse("help launch");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("launch"));
     }
 }

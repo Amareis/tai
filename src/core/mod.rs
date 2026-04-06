@@ -145,10 +145,6 @@ async fn client_loop(
     if let Some(line) = client.read_line().await? {
         info!("received from model channel: {}", line);
 
-        if line == "exit" {
-            return Ok(true);
-        }
-
         match parser::parse(&line) {
             Ok(cmd) => match back.execute(cmd).await {
                 Ok(response) => match response {
@@ -183,7 +179,7 @@ async fn client_loop(
                 }
             },
             Err(e) => {
-                client.write_line(&format!("Parse error: {e}")).await?;
+                client.write_line(&format!("{e}")).await?;
             }
         }
 
