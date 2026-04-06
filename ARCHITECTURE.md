@@ -7,16 +7,16 @@
 ```
 ┌──────────────────────────── KERNEL (Rust) ────────────────────────────┐
 │  event loop · prompt assembly · token budget                          │
-│  Arc<RwLock<WorldState>> — единое состояние для обоих viewports       │
+│  Arc<RwLock<WorldState>> — единое состояние                           │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
-│  ┌─── User Viewport ──────┐    ┌─── Model Viewport ──────────────┐    │
-│  │  Терминал человека      │    │  Kitty окно (FD passed)          │    │
-│  │  ratatui:               │    │  ratatui:                        │    │
-│  │    Windows (dashboard)  │    │    Chat (диалог с моделью)       │    │
-│  │    Debug (step/run)     │    │    Context view                  │    │
-│  │    Status bar           │    │    Status bar                    │    │
-│  └─────────────────────────┘    └──────────────────────────────────┘    │
+│  ┌─── User Viewport ──────┐    ┌─── Model Channel ────────────────┐   │
+│  │  Терминал человека      │    │  Unix socket → Kitty окно        │   │
+│  │  ratatui (dashboard):   │    │  Plain text (НЕ ratatui):        │   │
+│  │    Windows              │    │    State header                  │   │
+│  │    Debug                │    │    Command log / chat             │   │
+│  │    Status bar           │    │    Input prompt                  │   │
+│  └─────────────────────────┘    └──────────────────────────────────┘   │
 │                                                                        │
 │  ┌─── Terminal Backend (trait) ────────────────────────────────────┐    │
 │  │  KittyBackend → Kitty RC protocol                               │    │
@@ -31,25 +31,49 @@
 
 Запуск:
   $ tai server                    # в терминале человека
-  → spawn Kitty: kitty -- tai client
-  → tai client: передаёт FD (stdin/stdout) через SCM_RIGHTS
-  → kernel: второй ratatui terminal на полученных FD
+  → spawn Kitty: kitty -- tai client --socket /tmp/tai.sock
+  → tai client подключается к Unix сокету
+  → server пишет текст в сокет → client печатает в stdout Kitty
+  → client читает stdin Kitty → отправляет строку в сокет → server получает
 ```
 
-### Server-Client FD Passing
+### Server-Client: Socket + Plain Text
 
-Kernel работает как один процесс с двумя ratatui terminal'ами:
-- **User Viewport**: stdout терминала где запущен `tai server`
-- **Model Viewport**: FD полученный от `tai client` через Unix Domain Socket (SCM_RIGHTS)
+Model Viewport **не использует ratatui**. Plain text через Unix Domain Socket.
 
-`tai client` — тонкий процесс. Подключается к Unix сокету, передаёт свои
-stdin/stdout, ловит SIGWINCH и пересылает resize events. Всё.
+Почему не ratatui:
+- ratatui включает alternate screen buffer → get-text не видит scrollback
+- Модели нужен **весь** вывод, не только visible viewport
+- scrollable widget прячет строки → модель не увидит ушедшее вверх
+- ANSI escape soup от ratatui — шум для модели, не сигнал
 
-Модель видит Model Viewport через стандартный механизм: get-text / send-text
-через Kitty RC (как и для всех окон). В перспективе можно передавать напрямую,
-но для начала — единый путь для всех окон.
+Как вместо этого:
+- Server пишет plain text в Unix socket — просто строки, без форматирования под ширину
+- `tai client` читает socket → `write_all()` в stdout → Kitty рендерит
+- `tai client` читает stdin → отправляет строки в socket → server получает
+- Старый вывод уходит в scrollback, доступен через get-text
+- Ресайз не нужен — plain text не зависит от размеров терминала
 
-Оба viewport читают один `Arc<RwLock<WorldState>>` — рендерят разное, данные одни.
+Модель видит Model Viewport через стандартный механизм: get-text через
+Kitty RC (как и для всех окон). Единый путь для всех окон.
+
+Состояние рисуется как:
+```
+═══════════════════════════════════════════
+STATE: Active 3 | Frozen 1 | Tokens: 12k
+FOCUS: build (bash, pid 1234)
+═══════════════════════════════════════════
+
+[build] $ cargo build 2>&1
+   Compiling tai v0.1.0
+   Finished dev [unoptimized] | 2.12s
+   exit code: 0
+
+> что дальше?
+```
+
+Обновление state: новые строки дописываются. Старый контекст в scrollback, не потерян.
+Никакого clear screen — просто поток строк.
 
 ---
 
@@ -81,37 +105,38 @@ trait TerminalBackend {
 
 ---
 
-## TUI — два viewport
+## Два интерфейса
 
-Ядро рендерит **два независимых ratatui интерфейса** из одного WorldState.
+Ядро предоставляет два интерфейса из одного WorldState.
 
 ### User Viewport (терминал человека)
-Запускается на stdout процесса `tai server`. Dashboard для наблюдения за системой.
+**ratatui** на stdout процесса `tai server`. Полноэкранный dashboard для наблюдения.
 
 - **Таб Windows**: Список окон. Клик → focus/summarize/view frozen content.
 - **Таб Debug**: Пошаговое исполнение команд модели. Step / Run All / Edit / Skip.
 - **Status bar**: Токены, активные окна, write target.
 
-### Model Viewport (Kitty окно)
-Запускается на FD полученном через SCM_RIGHTS от `tai client`.
+Один ratatui `Terminal<CrosstermBackend<Stdout>>`. Стандартная отрисовка.
+
+### Model Channel (Kitty окно)
+**Plain text** через Unix socket. НЕ ratatui. Обычный shell-режим.
+
 **Единственный интерфейс для модели и человека как равноправных пользователей.**
 
-- **Chat**: Диалог с моделью. Модель пишет prose + code blocks, человек видит ответы.
-  Человек может писать в этот же чат напрямую (crossterm input).
-- **Context view**: Текущий контекст модели — focused окна, dashboard, previous response.
+- **State header**: статус системы (окна, токены, focus)
+- **Command log**: вывод команд, ответы модели, результаты
+- **Input prompt**: `> ` — и модель (через send-text), и человек (через stdin) пишут сюда
+
+Протокол: newline-delimited текст через Unix socket.
+- Server → Client: строки для вывода (plain text, без форматирования под ширину)
+- Client → Server: строки ввода (то что человек набрал и нажал Enter)
+- Ресайз не нужен — plain text не зависит от размеров терминала
 
 ### Два представления чата
-- Человек видит в Model Viewport: свой perspective (ввод, ответы модели, prose)
+- Человек видит в Model Channel: свой perspective (ввод, ответы модели, prose)
 - Модель видит в промпте: `## Окно [chat] (focused)` с историей как observation
 
-Одни данные, разный рендер. Ядро рисует ratatui для обоих viewport, собирает observations для модели.
-
-### TerminalManager
-
-Владеет `HashMap<ViewId, Terminal<CrosstermBackend<File>>>`. Отвечает за:
-- Создание terminal на FD (User viewport при старте, Model viewport при подключении client)
-- Resize при SIGWINCH (для Model viewport — приходит через Unix сокет от client)
-- `draw_all()` — перерисовка всех активных терминалов
+Одни данные, разный рендер. User Viewport — ratatui dashboard. Model Channel — plain text через socket.
 
 ---
 
@@ -255,9 +280,9 @@ tai/
 │   │   ├── kitty.rs            # KittyBackend (kitty-rc)
 │   │   └── watch.rs            # ProcessWatch: poll at_prompt
 │   │
-│   ├── fd/                     # FD passing infrastructure
-│   │   ├── mod.rs              # Unix socket server/client, SCM_RIGHTS
-│   │   └── terminal_manager.rs # HashMap<ViewId, Terminal<CrosstermBackend<File>>>
+│   ├── client/                 # Unix socket server/client для Model Channel
+│   │   ├── mod.rs              # Socket server (в kernel), socket client (~30 строк)
+│   │   └── model_view.rs       # Потоковый текстовый вывод: строки в socket
 │   │
 │   ├── session/
 │   │   ├── mod.rs
@@ -277,10 +302,9 @@ tai/
 │   │   ├── parser.rs           # parse_blocks(): window:mode + tai:cmd
 │   │   └── tai_command.rs      # парсер команд ядра
 │   │
-│   ├── tui/                    # ratatui views (оба viewport)
-│   │   ├── mod.rs              # TerminalManager, draw_all()
-│   │   ├── user_view.rs        # User Viewport: Windows, Debug, Status
-│   │   ├── model_view.rs       # Model Viewport: Chat, Context, Status
+│   ├── tui/                    # ratatui User Viewport (один terminal)
+│   │   ├── mod.rs              # Terminal setup, event loop
+│   │   ├── user_view.rs        # Windows tab, Debug tab, Status bar
 │   │   └── status_bar.rs       # общие компоненты
 │   │
 │   ├── kernel/
@@ -312,8 +336,8 @@ Doc-комментарии и определения типов — в исхо�
 - [`src/types.rs`](src/types.rs) — `WindowState`, `Window`, `Session`, `LaunchOpts`, `BlockMode`, `TaiCommand`, `ParsedSegment`, `TickTrigger`
 - [`src/backend/mod.rs`](src/backend/mod.rs) — `TerminalBackend` trait, `WindowId`, `WindowInfo`, `BackendError`
 - [`src/config.rs`](src/config.rs) — `Config`, `KernelConfig`, `ModelConfig`, `SessionConfig`, `BackendConfig`
-- [`src/fd/mod.rs`](src/fd/mod.rs) — `FdServer`, `FdClient`, `ViewId`, SCM_RIGHTS send/recv
-- [`src/fd/terminal_manager.rs`](src/fd/terminal_manager.rs) — `TerminalManager`, `draw_all()`
+- [`src/client/mod.rs`](src/client/mod.rs) — Unix socket server/client для Model Channel
+- [`src/client/model_view.rs`](src/client/model_view.rs) — plain text рендер Model Channel
 
 ---
 
@@ -321,17 +345,19 @@ Doc-комментарии и определения типов — в исхо�
 
 ```
 tai server [--socket PATH] [--hidden]
-  → Инициализирует User Viewport на stdout
+  → Инициализирует User Viewport (ratatui) на stdout
   → Создаёт Unix сокет (default: /tmp/tai.sock)
   → spawn Kitty: kitty -- tai client --socket PATH
-  → Ждёт подключения client → получает FD → Model Viewport
-  → Запускает event loop
+  → Ждёт подключения client по сокету
+  → Пишет plain text в сокет → client печатает в Kitty stdout
+  → Читает строки из сокета ← client пересылает stdin Kitty
 
 tai client --socket PATH
   → Подключается к Unix сокету
-  → Передаёт stdin/stdout через SCM_RIGHTS
-  → Ловит SIGWINCH → отправляет resize message
-  → Спит (thin proxy)
+  → rustyline для ввода (история, навигация по словам, ↑↓)
+  → Строки ввода → сокет → server
+  → Сокет → stdout → человек видит ответы
+  → ~50 строк кода, readline↔socket proxy
 ```
 
 ---
@@ -357,8 +383,6 @@ tai client --socket PATH
 | Trigger | at_prompt / user message / idle timeout |
 | Backend | TerminalBackend trait |
 | TAI Command | Команда ядра (launch/close/focus) |
-| Viewport | Один из двух ratatui терминалов (User / Model) |
-| Model Viewport | Kitty окно — чат + контекст, для модели и человека |
-| User Viewport | Терминал человека — dashboard + debug |
-| FD Passing | Передача файловых дескрипторов через SCM_RIGHTS |
-| TerminalManager | Владеет HashMap viewport → ratatui Terminal |
+| User Viewport | Терминал человека — ratatui dashboard + debug |
+| Model Channel | Kitty окно — plain text через Unix socket, чат + команды |
+| tai client | readline↔socket proxy (~50 строк, rustyline: история, навигация по словам) |

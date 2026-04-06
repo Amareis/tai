@@ -3,16 +3,21 @@ pub mod config;
 pub mod fd;
 pub mod types;
 
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use fd::ViewId;
-use fd::terminal_manager::TerminalManager;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 use std::env;
+use std::fs::File;
+use std::io::Write;
+use tokio::io::{self, AsyncBufReadExt, BufReader};
 use std::path::PathBuf;
-use tracing_subscriber::EnvFilter;
+use std::time::Duration;
+use crossterm::event::{read, Event, KeyCode, KeyModifiers};
+use ratatui::{init, restore, DefaultTerminal};
 use tokio::sync::oneshot;
+use tokio::time::sleep;
+use tracing_subscriber::EnvFilter;
+
 /// Запуск TAI сервера: User viewport + Kitty + Model viewport.
 pub async fn run_server(
     socket_path: Option<PathBuf>,
@@ -23,8 +28,7 @@ pub async fn run_server(
         .with_env_filter(EnvFilter::from_default_env().add_directive("tai=info".parse()?))
         .init();
 
-    let mut tm = TerminalManager::new();
-    tm.init_user_viewport(debug)?;
+    let mut tm = init();
 
     tracing::info!("user viewport initialized");
 
@@ -51,64 +55,80 @@ pub async fn run_server(
     let _kitty =
         backend::kitty::KittyBackend::spawn(&args, Some(kitty_socket.clone()), hidden).await?;
 
-    tracing::info!(
-        "kitty spawned, socket: {}",
-        kitty_socket.display()
-    );
+    tracing::info!("kitty spawned, socket: {}", kitty_socket.display());
 
-    let model_file = rx.await??;
-    tm.init_model_viewport(model_file)?;
+    let mut model_file = rx.await??;
+    print_hello(&mut model_file);
 
     tracing::info!("model viewport initialized, drawing...");
 
-    draw_hello(&mut tm)?;
+    let _ = draw_hello(&mut tm).await;
 
-    tracing::info!("press Ctrl+C to exit");
-    tokio::signal::ctrl_c().await?;
-
-    tm.restore();
+    restore();
     Ok(())
 }
 
+fn print_hello(out: &mut File) {
+    let _ = out.write_all("Model viewport\n".repeat(100).as_bytes());
+}
 
 /// Запуск TAI клиента внутри Kitty: передать FD и спать.
-pub async fn run_client(socket_path: PathBuf, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_client(
+    socket_path: PathBuf,
+    _debug: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("tai=info".parse()?))
         .init();
 
-    //todo что делать с рав модом на дочернем терминале?
-    if !debug {
-        let _ = enable_raw_mode();
-    }
     tracing::info!("tai client starting, socket: {}", socket_path.display());
     fd::send_connection(socket_path).await?;
+    let stdin = io::stdin();
+    let reader = BufReader::new(stdin);
+    let mut lines = reader.lines();
 
-    tokio::signal::ctrl_c().await?;
+    print!("Введите текст (exit для выхода):\n> ");
 
-    //todo что делать с рав модом на дочернем терминале?
-    let _ = disable_raw_mode();
+    // Читаем строки в цикле по мере их поступления
+    while let Some(line) = lines.next_line().await? {
+        print!("Эхо: {}\n> ", line);
+
+        if line == "exit" {
+            break;
+        }
+    }
+
+    // tokio::signal::ctrl_c().await?;
+
     Ok(())
 }
 
-fn draw_hello(tm: &mut TerminalManager) -> Result<(), Box<dyn std::error::Error>> {
-    let user_term = tm.get_mut(ViewId::User)?;
-    user_term.draw(|f| {
-        let area = Rect::new(0, 0, f.area().width, f.area().height);
-        f.render_widget(
-            Paragraph::new("TAI Server (User Viewport)\n".repeat(100)).style(Style::default().fg(Color::Green)),
-            area,
-        );
-    })?;
+async fn draw_hello(tm: &mut DefaultTerminal) -> Result<(), Box<dyn std::error::Error>> {
+    let mut exit = false;
+    while !exit {
+        tm.draw(|f| {
+            let area = Rect::new(0, 0, f.area().width, f.area().height);
+            f.render_widget(
+                Paragraph::new("TAI Server (User Viewport)\n".repeat(5))
+                    .style(Style::default().fg(Color::Green)),
+                area,
+            );
+        })?;
+        match read()? {
+            Event::Key(key) => {
+                if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
+                    exit = true;
+                }
+                if key.code == KeyCode::Esc {
+                    exit = true;
+                }
+            }
+            Event::Mouse(_mouse_event) => {
 
-    let model_term = tm.get_mut(ViewId::Model)?;
-    model_term.draw(|f| {
-        let area = Rect::new(0, 0, f.area().width, f.area().height);
-        f.render_widget(
-            Paragraph::new("TAI Model Workspace\n".repeat(100)).style(Style::default().fg(Color::Cyan)).wrap(Wrap{trim: false}),
-            area,
-        );
-    })?;
-
+            }
+            _ => {}
+        }
+        sleep(Duration::from_millis(60)).await;
+    }
     Ok(())
 }

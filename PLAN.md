@@ -26,40 +26,40 @@
 - [x] Интеграционные тесты с реальным Kitty (требует Kitty в CI/dev)
 - [x] Doc-комментарии для KittyBackend + ProcessWatch
 
-### Phase 2: FD Passing + Minimal Dual TUI
+### Phase 2: Unix Socket + Minimal Dual Interface
 
-Цель: `tai server` → Kitty открывается → оба терминала рисуют.
+Цель: `tai server` → Kitty открывается → оба интерфейса работают.
 
-- [x] Добавить зависимости: `roam-fdpass` (для SCM_RIGHTS)
-- [x] `fd/mod.rs` — Unix Domain Socket server/client
-    - Server: listen на `/tmp/tai.sock`, accept connection, recv FD через `recvmsg` + `SCM_RIGHTS`
-    - Client: connect, send FD (stdout) через `sendmsg` + `SCM_RIGHTS`, sleep
-- [ ] `fd/terminal_manager.rs` — TerminalManager
-    - `HashMap<ViewId, Terminal<CrosstermBackend<File>>>`
-    - Создание terminal на FD (User viewport при старте, Model viewport при подключении client)
-    - `draw_all()` — перерисовка всех viewport'ов
-- [x] Обновить `main.rs` — clap subcommands:
-    - `tai server [--socket PATH] [--hidden]` — инициализирует User Viewport на stdout,
-      spawn Kitty с `kitty -- tai client --socket PATH`, ждёт FD, создаёт Model Viewport
-    - `tai client --socket PATH` — подключиться к сокету, передать FD, sleep
-- [ ] SIGWINCH handler в client → resize message через Unix socket → server вызывает `terminal.resize()`
-- [x] Минимальная отрисовка: User Viewport = "TAI Server (User)", Model Viewport = "TAI Model Workspace"
-- [ ] **Checkpoint**: запускаю `tai server` → Kitty открывается → оба окна показывают текст → resize работает
+- [ ] `client/mod.rs` — Unix Domain Socket server (в kernel) + client
+    - Server: listen на сокете, accept, newline-delimited text protocol
+    - Client: connect, stdin→socket (строки ввода), socket→stdout (строки вывода)
+    - Client — ~50 строк, rustyline-async ↔ socket proxy (история команд, навигация по словам)
+- [ ] `client/model_view.rs` — текстовый вывод в socket
+    - State header (окна, токены, focus) — просто строки текста
+    - НЕ ratatui, НЕ ANSI форматирование — просто writeln в socket
+    - Новые строки дописываются, никаких clear screen
+- [ ] Обновить `main.rs` — clap subcommands:
+    - `tai server [--socket PATH] [--hidden]` — ratatui User Viewport на stdout,
+      spawn Kitty с `kitty -- tai client --socket PATH`, ждёт socket connection
+    - `tai client --socket PATH` — подключиться к сокету, stdin↔socket↔stdout, sleep
+- [ ] User Viewport: минимальный ratatui — "TAI Server (User Viewport)"
+- [ ] Model Channel: "TAI Model Workspace" через socket
+- [ ] **Checkpoint**: запускаю `tai server` → Kitty открывается → оба окна показывают текст → набираю текст в Kitty → server получает строку
 - [ ] Doc-комментарии
 
 ### Phase 3: Command Parser + Window Operations
 
 Цель: печатаю `launch bash` в Kitty окно → появляется новое окно → вижу в User Viewport.
 
-- [ ] `routing/parser.rs` — парсинг текстовых команд из Model Viewport
+- [ ] `routing/parser.rs` — парсинг текстовых команд из Model Channel
     - Формат: `launch --title name -- cmd args`, `close <window-id>`, `focus <window-id>`,
       `list`, `send <window-id> text...`
     - Простой line-based парсер (не code blocks — это для модели, человек пишет plain commands)
 - [ ] `routing/tai_command.rs` — TaiCommand enum, парсер команд
-- [ ] Чтение ввода из Model Viewport (crossterm events → command parser → dispatch)
+- [ ] Чтение ввода из Model Channel (socket lines → command parser → dispatch)
 - [ ] Dispatch: tai_command → backend calls (launch, close, send-text, list-windows, get-text)
 - [ ] User Viewport: список окон (обновляется после каждой команды)
-- [ ] Model Viewport: результат команды (stdout-style feedback: "launched window abc123")
+- [ ] Model Channel: результат команды (text feedback: "launched window abc123")
 - [ ] **Checkpoint**: в Kitty окне набираю `launch bash` → появляется Kitty tab → `list` → вижу оба окна → `close 1` → окно закрылось
 - [ ] Тесты парсера (валидные/невалидные команды)
 - [ ] Doc-комментарии
@@ -90,7 +90,7 @@
 - [ ] `prompt/budget.rs` — подсчёт токенов (tiktoken-rs), бюджет слоёв
 - [ ] `prompt/assembler.rs` — сборка промпта через PromptLayout
 - [ ] `prompt/references.rs` — сбор --help/man page для окон с правом записи
-- [ ] Model Viewport: команда `prompt` → показывает собранный промпт (для debug)
+- [ ] Model Channel: команда `prompt` → показывает собранный промпт (для debug)
 - [ ] **Checkpoint**: открываю несколько окон → `prompt` → вижу полный промпт с содержимым окон, mind, budget
 - [ ] Тесты layout (mock данные, проверка структуры и бюджета)
 - [ ] Doc-комментарии
@@ -101,34 +101,35 @@
 
 - [ ] `models/l_model.rs` — LLM клиент через llm crate (Claude/GPT API)
 - [ ] Расширить parser: модель отвечает markdown с code blocks (```window:mode```)
-    - Человек: plain commands (из Phase B)
+    - Человек: plain commands через socket (из Phase 3)
     - Модель: code blocks с обязательными window:mode
     - Один парсер, два input format
 - [ ] `kernel/mod.rs` — main tick loop
-    - Триггеры: at_prompt (command done) / user input in Model Viewport / idle timeout
+    - Триггеры: at_prompt (command done) / user input from Model Channel socket / idle timeout
     - Tick: assemble → invoke model → parse response → execute blocks → wait
     - Blocks выполняются параллельно
 - [ ] Thinking → mind.md (извлечение из extended thinking)
 - [ ] Обработка ошибок: изоляция между блоками, timeout (30с)
-- [ ] Model Viewport: показывает ответы модели (prose + executed blocks)
+- [ ] Model Channel: показывает ответы модели (prose + executed blocks) как plain text
 - [ ] User Viewport: debug view — что модель решила, что выполнилось
 - [ ] **Checkpoint**: пишу в Kitty "найди все TODO в проекте" → модель открывает окно с grep → результат виден → модель докладывает
 - [ ] Doc-комментарии
 
 ### Phase 7: TUI Polish
 
-Цель: полноценные интерактивные интерфейсы в обоих viewport'ах.
+Цель: полноценный интерактивный dashboard в User Viewport.
 
-- [ ] Model Viewport — Chat UI:
-    - Scrollable история, подсветка code blocks, input field
-    - Context view: collapsible focused windows
+- [ ] Model Channel polish:
+    - Подсветка code blocks ANSI цветами
+    - Красивый state header
+    - Команда `clear` для очистки лога (scrollback сохраняется)
 - [ ] User Viewport — Debug UI:
     - Windows tab: список с фильтрами, preview frozen content
     - Debug tab: пошаговое исполнение (Step / Run All / Edit / Skip)
     - Status bar: токены, активные окна, write target, tick count
 - [ ] `tui/status_bar.rs` — общие компоненты
-- [ ] Обработка горячих клавиш в обоих viewport'ах
-- [ ] **Checkpoint**: полноценная интерактивная сессия — model view как IDE, user view как dashboard
+- [ ] Обработка горячих клавиш в User Viewport
+- [ ] **Checkpoint**: полноценная интерактивная сессия — Model Channel как REPL, User Viewport как dashboard
 
 ## Открытые вопросы
 

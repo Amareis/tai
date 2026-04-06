@@ -1,5 +1,3 @@
-pub mod terminal_manager;
-
 use std::fs::File;
 use std::os::fd::{FromRawFd, IntoRawFd};
 use std::path::PathBuf;
@@ -8,7 +6,7 @@ use roam_fdpass::{recv_fd, send_fd};
 use thiserror::Error;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::oneshot::Sender;
-use tracing::{info};
+use tracing::info;
 
 #[derive(Debug, Error)]
 pub enum FdError {
@@ -20,13 +18,6 @@ pub enum FdError {
 
     #[error("failed to send FD: {0}")]
     SendFailed(String),
-}
-
-/// Идентификатор viewport — User (stdout сервера) или Model (FD от клиента).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ViewId {
-    User,
-    Model,
 }
 
 /// Listen на Unix сокете, дождаться одного подключения, получить FD.
