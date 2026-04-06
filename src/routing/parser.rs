@@ -1,9 +1,6 @@
-use clap::CommandFactory;
-use clap::{Parser, Subcommand};
+use crate::backend::BackendCmd;
 use clap::error::ErrorKind;
-use crate::backend::{
-    BackendCmd, CloseCmd, GetTextCmd, LaunchCmd, SendKeysCmd, SendTextCmd, SetTitleCmd, WindowId,
-};
+use clap::{Parser};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -19,40 +16,7 @@ pub enum ParseError {
 #[command(disable_help_flag = true)]
 struct TaiCli {
     #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand, Debug)]
-#[command(disable_help_flag = false)]
-enum Commands {
-    Launch {
-        #[arg(short, long)]
-        title: Option<String>,
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        command: Vec<String>,
-    },
-    Send {
-        window: WindowId,
-        #[arg(trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    Keys {
-        window: WindowId,
-        #[arg(trailing_var_arg = true)]
-        keys: Vec<String>,
-    },
-    Get {
-        window: WindowId,
-    },
-    Close {
-        window: WindowId,
-    },
-    List,
-    Title {
-        window: WindowId,
-        #[arg(trailing_var_arg = true)]
-        title: Vec<String>,
-    },
+    command: BackendCmd,
 }
 
 pub fn parse(input: &str) -> Result<BackendCmd, ParseError> {
@@ -64,61 +28,49 @@ pub fn parse(input: &str) -> Result<BackendCmd, ParseError> {
     })?;
 
     let cli = match TaiCli::try_parse_from(args) {
-        Ok(cli) => Ok(cli),
-        Err(e) => Err(
-            if e.kind() == ErrorKind::DisplayHelp {
-                ParseError::Help(TaiCli::command().render_long_help().to_string())
-            } else {
-                ParseError::Clap(e)
-            }
-        )
+        Ok(cmd) => Ok(cmd),
+        Err(e) => Err(if e.kind() == ErrorKind::DisplayHelp {
+            ParseError::Help(e.to_string())
+        } else {
+            ParseError::Clap(e)
+        }),
     }?;
 
-    Ok(match cli.command {
-        Commands::Launch { title, command } => {
-            if command.is_empty() {
-                return Err(ParseError::Clap(clap::Error::raw(
-                    ErrorKind::MissingRequiredArgument,
-                    "launch requires a command after --",
-                )));
-            }
-            BackendCmd::Launch(LaunchCmd { title, command })
-        }
-        Commands::Send { window, text } => BackendCmd::SendText(SendTextCmd {
-            window,
-            text: text.join(" "),
-        }),
-        Commands::Keys { window, keys } => BackendCmd::SendKeys(SendKeysCmd {
-            window,
-            keys: keys.join(" "),
-        }),
-        Commands::Get { window } => BackendCmd::GetText(GetTextCmd { window }),
-        Commands::Close { window } => BackendCmd::Close(CloseCmd { window }),
-        Commands::List => BackendCmd::List,
-        Commands::Title { window, title } => BackendCmd::SetTitle(SetTitleCmd {
-            window,
-            title: title.join(" "),
-        }),
-    })
+    let cmd = cli.command;
+
+    if let BackendCmd::Launch(l) = &cmd && l.command.is_empty() {
+        return Err(ParseError::Clap(clap::Error::raw(
+            ErrorKind::MissingRequiredArgument,
+            "launch requires a command after --",
+        )));
+    }
+
+    Ok(cmd)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::{
+        CloseCmd, GetTextCmd, LaunchCmd, SendKeysCmd, SendTextCmd, SetTitleCmd, WindowId,
+    };
 
     #[test]
     fn test_launch_basic() {
         let cmd = parse("launch -- bash").unwrap();
-        assert!(matches!(cmd, BackendCmd::Launch(l) if l.command == vec!["bash"]));
+        match cmd {
+            BackendCmd::Launch(l) => assert_eq!(l.command, vec!["bash"]),
+            _ => panic!("expected Launch"),
+        }
     }
 
     #[test]
     fn test_launch_with_title() {
         let cmd = parse("launch --title mytitle -- bash -c 'echo hello'").unwrap();
         match cmd {
-            BackendCmd::Launch(l) => {
-                assert_eq!(l.title, Some("mytitle".to_string()));
-                assert_eq!(l.command, vec!["bash", "-c", "echo hello"]);
+            BackendCmd::Launch(LaunchCmd { title, command }) => {
+                assert_eq!(title, Some("mytitle".to_string()));
+                assert_eq!(command, vec!["bash", "-c", "echo hello"]);
             }
             _ => panic!("expected Launch"),
         }
@@ -128,8 +80,8 @@ mod tests {
     fn test_launch_command_with_dashes() {
         let cmd = parse("launch -- cargo build --release").unwrap();
         match cmd {
-            BackendCmd::Launch(l) => {
-                assert_eq!(l.command, vec!["cargo", "build", "--release"]);
+            BackendCmd::Launch(LaunchCmd { command, .. }) => {
+                assert_eq!(command, vec!["cargo", "build", "--release"]);
             }
             _ => panic!("expected Launch"),
         }
@@ -139,11 +91,11 @@ mod tests {
     fn test_send_text() {
         let cmd = parse("send 1 hello world").unwrap();
         match cmd {
-            BackendCmd::SendText(s) => {
-                assert_eq!(s.window, WindowId("1".to_string()));
-                assert_eq!(s.text, "hello world");
+            BackendCmd::Send(SendTextCmd { window, text }) => {
+                assert_eq!(window, WindowId("1".to_string()));
+                assert_eq!(text, vec!["hello", "world"]);
             }
-            _ => panic!("expected SendText"),
+            _ => panic!("expected Send"),
         }
     }
 
@@ -151,11 +103,11 @@ mod tests {
     fn test_send_keys() {
         let cmd = parse("keys 1 Ctrl+c Enter").unwrap();
         match cmd {
-            BackendCmd::SendKeys(k) => {
-                assert_eq!(k.window, WindowId("1".to_string()));
-                assert_eq!(k.keys, "Ctrl+c Enter");
+            BackendCmd::Keys(SendKeysCmd { window, keys }) => {
+                assert_eq!(window, WindowId("1".to_string()));
+                assert_eq!(keys, vec!["Ctrl+c", "Enter"]);
             }
-            _ => panic!("expected SendKeys"),
+            _ => panic!("expected Keys"),
         }
     }
 
@@ -163,10 +115,10 @@ mod tests {
     fn test_get_text() {
         let cmd = parse("get 123").unwrap();
         match cmd {
-            BackendCmd::GetText(g) => {
-                assert_eq!(g.window, WindowId("123".to_string()));
+            BackendCmd::Get(GetTextCmd { window }) => {
+                assert_eq!(window, WindowId("123".to_string()));
             }
-            _ => panic!("expected GetText"),
+            _ => panic!("expected Get"),
         }
     }
 
@@ -174,8 +126,8 @@ mod tests {
     fn test_close() {
         let cmd = parse("close 42").unwrap();
         match cmd {
-            BackendCmd::Close(c) => {
-                assert_eq!(c.window, WindowId("42".to_string()));
+            BackendCmd::Close(CloseCmd { window }) => {
+                assert_eq!(window, WindowId("42".to_string()));
             }
             _ => panic!("expected Close"),
         }
@@ -191,11 +143,11 @@ mod tests {
     fn test_set_title() {
         let cmd = parse("title 1 my new title").unwrap();
         match cmd {
-            BackendCmd::SetTitle(t) => {
-                assert_eq!(t.window, WindowId("1".to_string()));
-                assert_eq!(t.title, "my new title");
+            BackendCmd::Title(SetTitleCmd { window, title }) => {
+                assert_eq!(window, WindowId("1".to_string()));
+                assert_eq!(title, vec!["my", "new", "title"]);
             }
-            _ => panic!("expected SetTitle"),
+            _ => panic!("expected Title"),
         }
     }
 

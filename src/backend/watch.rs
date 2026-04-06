@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::future::Future;
 use std::time::Duration;
 
 use tokio::time;
@@ -94,7 +95,7 @@ impl<B: TerminalBackend> ProcessWatch<B> {
         for window_id in &at_prompt_ids {
             let content = match self
                 .backend
-                .execute(BackendCmd::GetText(GetTextCmd {
+                .execute(BackendCmd::Get(GetTextCmd {
                     window: window_id.clone(),
                 }))
                 .await
@@ -209,10 +210,10 @@ mod tests {
                 BackendCmd::Launch(_) => {
                     Ok(CmdResponse::WindowCreated(WindowId("mock-1".to_string())))
                 }
-                BackendCmd::SendText(_) | BackendCmd::SendKeys(_) | BackendCmd::SetTitle(_) => {
+                BackendCmd::Send(_) | BackendCmd::Keys(_) | BackendCmd::Title(_) => {
                     Ok(CmdResponse::Ok)
                 }
-                BackendCmd::GetText(cmd) => {
+                BackendCmd::Get(cmd) => {
                     self.get_text_calls.fetch_add(1, Ordering::SeqCst);
                     let windows = self.windows.lock().unwrap();
                     let w = windows

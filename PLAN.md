@@ -47,7 +47,7 @@
 - [x] **Checkpoint**: запускаю `tai server` → Kitty открывается → оба окна показывают текст → набираю текст в Kitty → server получает строку
 - [ ] Doc-комментарии
 
-### Phase 3: Command Parser + Window Operations
+### Phase 3: Command Parser + Window Operations ✅
 
 Цель: печатаю `launch bash` в Kitty окно → появляется новое окно → вижу в User Viewport.
 
@@ -67,9 +67,11 @@
 - [x] Model Channel: результат команды (текстовый feedback: "Window created: 123")
 - [x] Тесты парсера (16 тестов: валидные/невалидные команды, clap error messages)
 - [x] Тесты ProcessWatch обновлены для нового API
-- [ ] User Viewport: список окон (обновляется после каждой команды)
-- [ ] **Checkpoint**: в Kitty окне набираю `launch bash` → появляется Kitty tab → `list` → вижу оба окна → `close 1` → окно закрылось
-- [ ] Doc-комментарии
+- [x] **Checkpoint**: в Kitty окне набираю `launch bash` → появляется Kitty tab → `list` → вижу оба окна → `close 1` → окно закрылось
+- [x] Doc-комментарии
+- [x] Debug mode (`--debug`): TUI не рисуется, только логи
+
+User Viewport отложен до Phase 7 — окна видны напрямую в терминале.
 
 ### Phase 4: Window Lifecycle + Session Persistence
 
@@ -139,6 +141,10 @@
 - [ ] **Checkpoint**: полноценная интерактивная сессия — Model Channel как REPL, User Viewport как dashboard
 
 ## Открытые вопросы
+
+### `keys` command bug
+
+`keys` отправляет символы как текст вместо keypress events. Возможно проблема в kitty-rc протоколе или формате `send-keys`. Исследовать позже.
 
 ### Stderr routing (три канала)
 

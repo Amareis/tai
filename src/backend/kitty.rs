@@ -142,12 +142,12 @@ impl TerminalBackend for KittyBackend {
     async fn execute(&self, cmd: BackendCmd) -> Result<CmdResponse, BackendError> {
         match cmd {
             BackendCmd::Launch(c) => self.cmd_launch(&c).await.map(CmdResponse::WindowCreated),
-            BackendCmd::SendText(c) => self.cmd_send_text(&c).await.map(|()| CmdResponse::Ok),
-            BackendCmd::SendKeys(c) => self.cmd_send_keys(&c).await.map(|()| CmdResponse::Ok),
-            BackendCmd::GetText(c) => self.cmd_get_text(&c).await.map(CmdResponse::Text),
+            BackendCmd::Send(c) => self.cmd_send_text(&c).await.map(|()| CmdResponse::Ok),
+            BackendCmd::Keys(c) => self.cmd_send_keys(&c).await.map(|()| CmdResponse::Ok),
+            BackendCmd::Get(c) => self.cmd_get_text(&c).await.map(CmdResponse::Text),
             BackendCmd::Close(c) => self.cmd_close(&c).await.map(|()| CmdResponse::Ok),
             BackendCmd::List => self.cmd_list().await.map(CmdResponse::Windows),
-            BackendCmd::SetTitle(c) => self.cmd_set_title(&c).await.map(|()| CmdResponse::Ok),
+            BackendCmd::Title(c) => self.cmd_set_title(&c).await.map(|()| CmdResponse::Ok),
         }
     }
 }
@@ -194,7 +194,8 @@ impl KittyBackend {
 
     async fn cmd_send_text(&self, cmd: &SendTextCmd) -> Result<(), BackendError> {
         let match_spec = Self::match_by_id(&cmd.window);
-        let data = format!("text:{}", cmd.text);
+        let text = cmd.text.join(" ");
+        let data = format!("text:{text}");
 
         let msg = SendTextCommand::new(&data)
             .match_spec(&match_spec)
@@ -213,8 +214,9 @@ impl KittyBackend {
 
     async fn cmd_send_keys(&self, cmd: &SendKeysCmd) -> Result<(), BackendError> {
         let match_spec = Self::match_by_id(&cmd.window);
+        let keys = cmd.keys.join(" ");
 
-        let msg = SendKeyCommand::new(&cmd.keys)
+        let msg = SendKeyCommand::new(&keys)
             .match_spec(&match_spec)
             .build()
             .map_err(|e| BackendError::SendFailed(format!("build send-key: {e}")))?;
@@ -327,8 +329,9 @@ impl KittyBackend {
 
     async fn cmd_set_title(&self, cmd: &SetTitleCmd) -> Result<(), BackendError> {
         let match_spec = Self::match_by_id(&cmd.window);
+        let title = cmd.title.join(" ");
 
-        let msg = SetWindowTitleCommand::new(&cmd.title)
+        let msg = SetWindowTitleCommand::new(&title)
             .match_spec(&match_spec)
             .build()
             .map_err(|e| BackendError::Communication(format!("build set-window-title: {e}")))?;

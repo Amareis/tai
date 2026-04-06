@@ -2,6 +2,7 @@ pub mod kitty;
 pub mod watch;
 
 use async_trait::async_trait;
+use clap::{Parser, Subcommand};
 use std::fmt;
 
 /// Уникальный идентификатор окна в backend.
@@ -39,53 +40,58 @@ pub struct WindowInfo {
 }
 
 /// Команда для запуска нового терминального окна.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Parser)]
 pub struct LaunchCmd {
     /// Заголовок окна
+    #[arg(short, long)]
     pub title: Option<String>,
     /// Команда для запуска (argv)
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
 }
 
 /// Команда отправки текста в stdin окна.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Parser)]
 pub struct SendTextCmd {
     /// ID окна
     pub window: WindowId,
     /// Текст для отправки
-    pub text: String,
+    #[arg(trailing_var_arg = true)]
+    pub text: Vec<String>,
 }
 
 /// Команда отправки клавиш в окно.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Parser)]
 pub struct SendKeysCmd {
     /// ID окна
     pub window: WindowId,
     /// Клавиши для отправки
-    pub keys: String,
+    #[arg(trailing_var_arg = true)]
+    pub keys: Vec<String>,
 }
 
 /// Команда получения содержимого окна.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Parser)]
 pub struct GetTextCmd {
     /// ID окна
     pub window: WindowId,
 }
 
 /// Команда закрытия окна.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Parser)]
 pub struct CloseCmd {
     /// ID окна
     pub window: WindowId,
 }
 
 /// Команда установки заголовка окна.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Parser)]
 pub struct SetTitleCmd {
     /// ID окна
     pub window: WindowId,
     /// Новый заголовок
-    pub title: String,
+    #[arg(trailing_var_arg = true)]
+    pub title: Vec<String>,
 }
 
 /// Команда для терминального backend.
@@ -94,22 +100,22 @@ pub struct SetTitleCmd {
 /// Clap парсит строку в `BackendCmd` enum.
 /// Ошибка парсинга → сразу feedback, даже до backend'а не доходит.
 /// Успех → `backend.execute(cmd)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Subcommand)]
 pub enum BackendCmd {
     /// Запустить новое терминальное окно
     Launch(LaunchCmd),
     /// Отправить текст в stdin окна
-    SendText(SendTextCmd),
+    Send(SendTextCmd),
     /// Отправить клавиши в окно
-    SendKeys(SendKeysCmd),
+    Keys(SendKeysCmd),
     /// Получить содержимое окна
-    GetText(GetTextCmd),
+    Get(GetTextCmd),
     /// Закрыть окно
     Close(CloseCmd),
     /// Получить список окон
     List,
     /// Установить заголовок окна
-    SetTitle(SetTitleCmd),
+    Title(SetTitleCmd),
 }
 
 /// Ответ на команду backend.

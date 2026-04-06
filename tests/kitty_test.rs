@@ -82,7 +82,7 @@ async fn get_text_returns_content() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let CmdResponse::Text(text) = backend
-        .execute(BackendCmd::GetText(tai::backend::GetTextCmd {
+        .execute(BackendCmd::Get(tai::backend::GetTextCmd {
             window: window_id.clone(),
         }))
         .await
@@ -107,9 +107,9 @@ async fn send_text_to_window() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     backend
-        .execute(BackendCmd::SendText(tai::backend::SendTextCmd {
+        .execute(BackendCmd::Send(tai::backend::SendTextCmd {
             window: window_id.clone(),
-            text: "hello-from-tai\n".to_string(),
+            text: vec!["hello-from-tai\n".to_string()],
         }))
         .await
         .expect("send_text should succeed");
@@ -117,7 +117,7 @@ async fn send_text_to_window() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let CmdResponse::Text(text) = backend
-        .execute(BackendCmd::GetText(tai::backend::GetTextCmd {
+        .execute(BackendCmd::Get(tai::backend::GetTextCmd {
             window: window_id.clone(),
         }))
         .await
@@ -177,9 +177,9 @@ async fn set_title() {
         .expect("launch should succeed") else { panic!("expected WindowCreated") };
 
     backend
-        .execute(BackendCmd::SetTitle(tai::backend::SetTitleCmd {
+        .execute(BackendCmd::Title(tai::backend::SetTitleCmd {
             window: window_id.clone(),
-            title: "new-title".to_string(),
+            title: vec!["new-title".to_string()],
         }))
         .await
         .expect("set_title should succeed");

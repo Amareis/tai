@@ -2,9 +2,7 @@ use chrono::Utc;
 use std::path::PathBuf;
 
 use tai::config::{self, Config};
-use tai::types::{
-    BlockMode, LaunchOpts, ParsedSegment, Session, TaiCommand, TickTrigger, Window, WindowState,
-};
+use tai::types::{Session, TickTrigger, Window, WindowState};
 
 #[test]
 fn window_state_active_roundtrip() {
@@ -137,87 +135,6 @@ fn session_queries() {
 
     let found_mut = session.find_window_mut(&w2_id);
     assert!(found_mut.is_some());
-}
-
-#[test]
-fn launch_opts_new() {
-    let opts = LaunchOpts::new(
-        "tests".to_string(),
-        vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            "cargo test".to_string(),
-        ],
-    );
-    assert_eq!(opts.title, "tests");
-    assert_eq!(opts.args, vec!["bash", "-c", "cargo test"]);
-}
-
-#[test]
-fn tai_command_roundtrip() {
-    let commands = vec![
-        TaiCommand::Launch {
-            title: "build".to_string(),
-            cmd: "cargo build".to_string(),
-            shell: None,
-        },
-        TaiCommand::Close {
-            window_id: "w-1".to_string(),
-        },
-        TaiCommand::Focus {
-            window_id: "w-2".to_string(),
-        },
-        TaiCommand::Summarize {
-            window_id: "w-3".to_string(),
-        },
-    ];
-
-    for cmd in commands {
-        let json = serde_json::to_string(&cmd).expect("serialize");
-        let de: TaiCommand = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(cmd, de);
-    }
-}
-
-#[test]
-fn block_mode_roundtrip() {
-    let modes = vec![BlockMode::Text, BlockMode::Keys];
-    for mode in modes {
-        let json = serde_json::to_string(&mode).expect("serialize");
-        let de: BlockMode = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(mode, de);
-    }
-}
-
-#[test]
-fn parsed_segment_equality() {
-    let prose = ParsedSegment::Prose("hello".to_string());
-    let block = ParsedSegment::Block {
-        target: "bash".to_string(),
-        mode: BlockMode::Text,
-        content: "ls".to_string(),
-    };
-    let cmd = ParsedSegment::TaiCommand(TaiCommand::Close {
-        window_id: "w-1".to_string(),
-    });
-    let invalid = ParsedSegment::Invalid {
-        raw_header: "???".to_string(),
-        error: "bad header".to_string(),
-    };
-
-    assert_eq!(prose, ParsedSegment::Prose("hello".to_string()));
-    assert_eq!(
-        block,
-        ParsedSegment::Block {
-            target: "bash".to_string(),
-            mode: BlockMode::Text,
-            content: "ls".to_string()
-        }
-    );
-    assert_eq!(prose, prose.clone());
-    assert_eq!(block, block.clone());
-    assert_eq!(cmd, cmd.clone());
-    assert_eq!(invalid, invalid.clone());
 }
 
 #[test]

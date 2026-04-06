@@ -139,82 +139,11 @@ impl Session {
     }
 }
 
-/// Параметры запуска нового терминального окна.
-///
-/// Ядро гарантирует `hold = true` для всех окон — это предотвращает
-/// потерю вывода при завершении процесса. Модель не контролирует этот флаг.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LaunchOpts {
-    /// Заголовок окна
-    pub title: String,
-    /// Аргументы команды (argv), например `["bash", "-c", "cargo build"]`
-    pub args: Vec<String>,
-}
-
-impl LaunchOpts {
-    #[must_use]
-    pub fn new(title: String, args: Vec<String>) -> Self {
-        Self { title, args }
-    }
-}
-
-/// Режим отправки данных в терминальное окно.
-///
-/// - `Text` — отправить текст как stdin (для bash, REPL и т.д.)
-/// - `Keys` — отправить keystrokes (для vim, htop, less и других TUI)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BlockMode {
-    Text,
-    Keys,
-}
-
-/// Команда управления ядра TAI.
-///
-/// Модель отправляет эти команды через `tai:cmd` code blocks.
-/// Ядро парсит, валидирует (`window_id` должен существовать) и dispatch'ит
-/// через `TerminalBackend`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "command", rename_all = "snake_case")]
-pub enum TaiCommand {
-    /// Запустить новое терминальное окно
-    Launch {
-        title: String,
-        cmd: String,
-        shell: Option<String>,
-    },
-    /// Закрыть окно
-    Close { window_id: String },
-    /// Развёрнуть окно (полный текст в промпте)
-    Focus { window_id: String },
-    /// Свёрнуть окно (оставить сводку)
-    Summarize { window_id: String },
-}
-
-/// Сегмент ответа модели после парсинга.
-///
-/// `parse_blocks()` разбирает markdown-ответ модели на сегменты.
-/// Валидные блоки проходят, невалидные попадают в `Invalid` с описанием ошибки.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParsedSegment {
-    /// Текст вне code blocks → отображается в чате
-    Prose(String),
-    /// Code block с целевым окном и режимом отправки
-    Block {
-        target: String,
-        mode: BlockMode,
-        content: String,
-    },
-    /// Команда ядра TAI (launch/close/focus/summarize)
-    TaiCommand(TaiCommand),
-    /// Невалидный code block (неизвестное окно, кривой заголовок)
-    Invalid { raw_header: String, error: String },
-}
-
 /// Триггер нового тика (цикла ядра).
 ///
 /// Тик — один проход assemble → invoke → parse → execute → wait.
 /// Триггер определяет, что запускает новый тик.
+/// TODO: Phase 6 — использовать в kernel/mod.rs
 #[derive(Debug, Clone, PartialEq)]
 pub enum TickTrigger {
     /// Терминальное окно завершилось (`at_prompt` == true)
