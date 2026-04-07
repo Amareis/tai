@@ -71,24 +71,70 @@
 - [x] Doc-комментарии
 - [x] Debug mode (`--debug`): TUI не рисуется, только логи
 
-User Viewport отложен до Phase 7 — окна видны напрямую в терминале.
+User Viewport отложен до Phase 8 — окна видны напрямую в терминале.
 
-### Phase 4: Window Lifecycle + Session Persistence
+### Phase 4: Agent Trait + Snapshot Tests
 
-Цель: перезапускаю `tai server` → окна восстанавливаются, frozen данные на месте.
+Цель: сервер тестируется напрямую с реальным Kitty backend, мокается только модель. Снепшоты = что видит модель.
+
+Не мокаем терминальный backend — он реальный (Kitty). Мокаем только Agent (LLM).
+MockAgent сохраняет полученный промпт в insta снепшот, возвращает захардкоженный ответ,
+снова получает промпт — снова снепшот — столько раз сколько нужно сценарию.
+Снепшоты в TOML — одновременно тесты и документация "что видит модель".
+
+- [ ] `models/mod.rs` — trait `Agent` (интерфейс взаимодействия с моделью)
+    - `async fn step(&self, prompt: &str) -> Result<String>` — получает собранный промпт, возвращает ответ
+    - В проде: вызывает LLM API (реализация в Phase 7)
+    - В тестах: MockAgent
+- [ ] `MockAgent` — пошаговый сценарий для тестов
+    - Конфигурируется последовательностью шагов: `MockAgent::new().step("ответ1").step("ответ2")`
+    - Каждый вызов: 1) сохраняет полученный промпт в insta снепшот 2) возвращает захардкоженный ответ
+    - `mock.assert_all_steps_consumed()` — проверка что сценарий пройден полностью
+- [ ] Test harness: `tests/harness.rs`
+    - Создаёт сервер напрямую (не subprocess) с реальным KittyBackend + MockAgent
+    - Helpers: `harness.input("launch bash")` → сервер обрабатывает → ответ в Model Channel
+    - Helpers: `harness.wait_tick()` — подождать полный tick cycle
+    - Helpers: `harness.freeze(id, exit_code)` — дождаться at_prompt → freeze → проверить
+    - Окна независимы → тесты параллельно без мьютексов
+- [ ] Snapshot tests (insta + toml) — что модель видит на каждом шаге:
+    - Пустой промпт (только system + mind)
+    - Одно active окно → dashboard + focused content
+    - Frozen окно → exit code + content в наблюдениях
+    - Несколько окон → dashboard показывает все, focused — только выбранные
+    - Предыдущий ответ модели → стоит перед текущими наблюдениями
+    - Full tick cycle: input → mock видит промпт → снепшот → возвращает ответ → parse → execute → mock видит следующий промпт → снепшот
+- [ ] Парсинг ответа модели (code blocks) — тоже через снепшоты:
+    - ````build:text\ncargo build\n````` → `ParsedSegment::Block{window: "build", mode: Text, content: "cargo build"}`
+    - Prose текст → `ParsedSegment::Prose`
+    - Невалидные блоки → `ParsedSegment::Invalid`
+- [ ] **Checkpoint**: `cargo test` зелёные, `cargo insta review` — снепшоты читаемые TOML, показывают всю структуру промпта
+- [ ] Doc-комментарии
+
+### Phase 5: Window Lifecycle
+
+Цель: команда завершилась → ядро обнаружило → захватило вывод → окно frozen с exit code.
 
 - [ ] `session/manager.rs` — Window lifecycle (Active → Frozen → Archived)
-    - at_prompt detection → freeze → get-text → snapshot → close
-    - Focus/summarize: управление какие окна в "контексте"
-- [ ] `session/manifest.rs` — session.json read/write (window registry, metadata)
-- [ ] `session/snapshot.rs` — frozen content save/load
-- [ ] Graceful shutdown: freeze all active → save manifest → kill Kitty
-- [ ] Recovery при старте: load manifest → reconnect/recreate windows
-- [ ] **Checkpoint**: запускаю `launch bash -c "echo hello && sleep 5"` → команда выполняется → окно freezes → exit code + вывод сохранены → рестарт tai → frozen данные доступны
+    - Window struct: id, title, pid, state, content (Option<String>), exit_code (Option<i32>)
+    - Session struct: Vec<Window>, tracked windows, focus state
+    - Active → Frozen: захватить get-text → сохранить content + exit code → close окно
+- [ ] `backend/watch.rs` — интеграция at_prompt в event loop
+    - Poll каждые 500мс для tracked окон
+    - at_prompt == true → emit event (WindowDone(window_id))
+    - Event → trigger freeze flow
+- [ ] Focus/summarize: управление какие окна в "контексте"
+    - `focus <window>` — окно развёрнуто, его content попадёт в промпт
+    - `unfocus <window>` — окно свёрнуто (summary вместо полного content)
+- [ ] Команды lifecycle через Model Channel:
+    - `list` — список с состояниями (Active/Frozen/Archived), exit code для frozen
+    - `focus <id>` / `unfocus <id>`
+    - `archive <id>` — frozen → archived (не в контексте)
+- [ ] Frozen content: хранить в RAM (Vec<String>), без записи на диск (persistence — отдельная фаза)
+- [ ] **Checkpoint**: `launch -- bash -c "echo hello && sleep 1"` → ждём → `windows` показывает frozen с exit code 0 + content "hello" → `focus 1` → content доступен
 - [ ] Тесты lifecycle с MockBackend
 - [ ] Doc-комментарии
 
-### Phase 5: Prompt Assembly
+### Phase 6: Prompt Assembly
 
 Цель: вижу собранный промпт в debug output. Реальные данные из окон.
 
@@ -104,7 +150,7 @@ User Viewport отложен до Phase 7 — окна видны напряму
 - [ ] Тесты layout (mock данные, проверка структуры и бюджета)
 - [ ] Doc-комментарии
 
-### Phase 6: L-Model + Event Loop
+### Phase 7: L-Model + Event Loop
 
 Цель: полный цикл. Пишу в Kitty → модель отвечает → ядро исполняет → результат виден.
 
@@ -124,7 +170,7 @@ User Viewport отложен до Phase 7 — окна видны напряму
 - [ ] **Checkpoint**: пишу в Kitty "найди все TODO в проекте" → модель открывает окно с grep → результат виден → модель докладывает
 - [ ] Doc-комментарии
 
-### Phase 7: TUI Polish
+### Phase 8: TUI Polish
 
 Цель: полноценный интерактивный dashboard в User Viewport.
 
@@ -139,6 +185,18 @@ User Viewport отложен до Phase 7 — окна видны напряму
 - [ ] `tui/status_bar.rs` — общие компоненты
 - [ ] Обработка горячих клавиш в User Viewport
 - [ ] **Checkpoint**: полноценная интерактивная сессия — Model Channel как REPL, User Viewport как dashboard
+
+### Phase 9: Session Persistence
+
+Цель: перезапускаю `tai server` → frozen данные на месте, история сохранена.
+
+- [ ] `session/manifest.rs` — session.json read/write (window registry, metadata)
+- [ ] `session/snapshot.rs` — frozen content save/load на диск
+- [ ] Graceful shutdown: freeze all active → save manifest → kill Kitty
+- [ ] Recovery при старте: load manifest → reconnect/recreate windows
+- [ ] **Checkpoint**: working session с несколькими frozen окнами → Ctrl+C → `tai server` → frozen данные доступны
+- [ ] Тесты persistence (save/load round-trip)
+- [ ] Doc-комментарии
 
 ## Открытые вопросы
 
