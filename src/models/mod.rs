@@ -105,6 +105,12 @@ pub struct TestAgent {
     current: AtomicUsize,
 }
 
+impl Default for TestAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestAgent {
     #[must_use]
     pub fn new() -> Self {

@@ -86,7 +86,7 @@ impl Server {
         self.tui_loop().await
     }
 
-    async fn tick(&mut self) -> Result<(), CoreError> {
+    pub async fn tick(&mut self) -> Result<(), CoreError> {
         let prompt = crate::prompt::build(&self.session, self.back.as_ref(), None).await?;
 
         let response = self.agent.step(&prompt).await?;
