@@ -71,72 +71,86 @@
 - [x] Doc-комментарии
 - [x] Debug mode (`--debug`): TUI не рисуется, только логи
 
-User Viewport отложен до Phase 8 — окна видны напрямую в терминале.
+User Viewport отложен до Phase 9 — окна видны напрямую в терминале.
 
-### Phase 4: Agent Trait + Snapshot Tests
+### Phase 4: MVP — Minimal Tick Cycle
 
-Цель: сервер тестируется напрямую с реальным Kitty backend, мокается только модель. Снепшоты = что видит модель.
+Цель: первый полный тик. Пишу в Kitty → (mock) модель отвечает → ядро парсит → исполняет → результат виден.
 
-Не мокаем терминальный backend — он реальный (Kitty). Мокаем только Agent (LLM).
-MockAgent сохраняет полученный промпт в insta снепшот, возвращает захардкоженный ответ,
-снова получает промпт — снова снепшот — столько раз сколько нужно сценарию.
-Снепшоты в TOML — одновременно тесты и документация "что видит модель".
+Вытаскиваем минимум из будущих Phase 5-7 — ровно столько чтобы тик работал.
+Всё упрощённое: плоский промпт, базовый lifecycle, без бюджета/слоёв.
 
-- [ ] `models/mod.rs` — trait `Agent` (интерфейс взаимодействия с моделью)
-    - `async fn step(&self, prompt: &str) -> Result<String>` — получает собранный промпт, возвращает ответ
-    - В проде: вызывает LLM API (реализация в Phase 7)
-    - В тестах: MockAgent
-- [ ] `MockAgent` — пошаговый сценарий для тестов
-    - Конфигурируется последовательностью шагов: `MockAgent::new().step("ответ1").step("ответ2")`
-    - Каждый вызов: 1) сохраняет полученный промпт в insta снепшот 2) возвращает захардкоженный ответ
-    - `mock.assert_all_steps_consumed()` — проверка что сценарий пройден полностью
+- [ ] `models/mod.rs` — trait `Agent`
+    - `async fn step(&self, prompt: &str) -> Result<String>` — получает промпт, возвращает ответ
+    - Пока без реальной реализации — Agent trait + минимальный stub
+- [ ] Prompt v1 (плоский, без слоёв/budget):
+    - system prompt (захардкоженный) + dashboard (список окон) + focused content (get-text)
+    - Предыдущий ответ модели перед текущими наблюдениями
+    - Собирается одной функцией, без trait abstraction
+- [ ] Парсинг ответа модели (code blocks):
+    - Regex для ` ```window:mode\ncontent\n``` ` → `ParsedSegment::Block / Prose / Invalid`
+    - Режимы: text, keys, cmd (tai:cmd)
+- [ ] Window lifecycle v1 (минимальный):
+    - Active → Frozen: at_prompt → get-text → content + exit code → close
+    - Frozen content в RAM, без диска
+    - Триггер: at_prompt (process done) → freeze → следующий тик
+- [ ] Tick loop (`kernel/mod.rs`):
+    - assemble prompt → agent.step() → parse response → execute blocks → wait
+    - Триггеры: user input (socket) + at_prompt (process done)
+    - Blocks выполняются параллельно
+    - Execute: text → send-text, keys → send-key, tai:cmd → dispatch
+- [ ] Model Channel: prose + executed blocks → plain text в socket
+- [ ] **Checkpoint**: `tai server` → пишу "запусти билд" → (mock) модель возвращает `\`\`\`build:text\ncargo build\n\`\`\`` → окно создаётся → команда выполняется → окно freezes → следующий тик показывает результат
+- [ ] Doc-комментарии
+
+### Phase 5: Snapshot Tests
+
+Цель: сервер тестируется с реальным Kitty, мокается только Agent. Снепшоты = что видит модель на каждом шаге.
+
+Опирается на MVP tick cycle из Phase 4. MockAgent подменяет Agent trait.
+Каждый вызов: снепшот промпта → вернуть захардкоженный ответ → repeat.
+
+- [ ] `MockAgent` — пошаговый сценарий
+    - `MockAgent::new().step("ответ1").step("ответ2")`
+    - Каждый вызов `step()`: 1) insta снепшот полученного промпта 2) возвращает захардкоженный ответ
+    - `mock.assert_all_steps_consumed()`
 - [ ] Test harness: `tests/harness.rs`
-    - Создаёт сервер напрямую (не subprocess) с реальным KittyBackend + MockAgent
-    - Helpers: `harness.input("launch bash")` → сервер обрабатывает → ответ в Model Channel
-    - Helpers: `harness.wait_tick()` — подождать полный tick cycle
-    - Helpers: `harness.freeze(id, exit_code)` — дождаться at_prompt → freeze → проверить
-    - Окна независимы → тесты параллельно без мьютексов
-- [ ] Snapshot tests (insta + toml) — что модель видит на каждом шаге:
-    - Пустой промпт (только system + mind)
-    - Одно active окно → dashboard + focused content
-    - Frozen окно → exit code + content в наблюдениях
-    - Несколько окон → dashboard показывает все, focused — только выбранные
-    - Предыдущий ответ модели → стоит перед текущими наблюдениями
-    - Full tick cycle: input → mock видит промпт → снепшот → возвращает ответ → parse → execute → mock видит следующий промпт → снепшот
-- [ ] Парсинг ответа модели (code blocks) — тоже через снепшоты:
-    - ````build:text\ncargo build\n````` → `ParsedSegment::Block{window: "build", mode: Text, content: "cargo build"}`
-    - Prose текст → `ParsedSegment::Prose`
-    - Невалидные блоки → `ParsedSegment::Invalid`
-- [ ] **Checkpoint**: `cargo test` зелёные, `cargo insta review` — снепшоты читаемые TOML, показывают всю структуру промпта
+    - Сервер напрямую (не subprocess) с реальным KittyBackend + MockAgent
+    - `harness.input("launch bash")` → сервер обрабатывает
+    - `harness.wait_tick()` — подождать полный tick cycle
+    - `harness.freeze(id, exit_code)` — дождаться at_prompt → freeze → проверить
+    - Окна независимы → тесты параллельно
+- [ ] Snapshot tests (insta + toml):
+    - Пустой промпт (только system)
+    - Active окно → dashboard + content
+    - Frozen окно → exit code + content
+    - Несколько окон, focus/unfocus
+    - Предыдущий ответ модели перед наблюдениями
+    - Full tick cycle сценарии: multi-step
+- [ ] Парсинг ответа — снепшоты ParsedSegment
+- [ ] **Checkpoint**: `cargo test` зелёные, `cargo insta review` — читаемые TOML снепшоты
+
+### Phase 6: Window Lifecycle (full)
+
+Цель: полноценное управление окнами — focus, unfocus, archive.
+
+Расширяет lifecycle v1 из Phase 4.
+
+- [ ] Focus/unfocus: управление какие окна в "контексте"
+    - `focus <window>` — окно развёрнуто, content попадёт в промпт
+    - `unfocus <window>` — окно свёрнуто (summary)
+- [ ] Archive: frozen → archived (не в контексте, не в RAM)
+    - `archive <id>` — frozen → archived
+- [ ] `windows` команда — список с состояниями, exit code для frozen
+- [ ] **Checkpoint**: `launch bash` → `launch python` → `focus 1` → `unfocus 2` → промпт показывает content окна 1, summary окна 2 → `archive 2` → окна 2 нет в промпте
+- [ ] Тесты
 - [ ] Doc-комментарии
 
-### Phase 5: Window Lifecycle
+### Phase 7: Prompt Assembly (full)
 
-Цель: команда завершилась → ядро обнаружило → захватило вывод → окно frozen с exit code.
+Цель: слои, бюджет, layout trait, references.
 
-- [ ] `session/manager.rs` — Window lifecycle (Active → Frozen → Archived)
-    - Window struct: id, title, pid, state, content (Option<String>), exit_code (Option<i32>)
-    - Session struct: Vec<Window>, tracked windows, focus state
-    - Active → Frozen: захватить get-text → сохранить content + exit code → close окно
-- [ ] `backend/watch.rs` — интеграция at_prompt в event loop
-    - Poll каждые 500мс для tracked окон
-    - at_prompt == true → emit event (WindowDone(window_id))
-    - Event → trigger freeze flow
-- [ ] Focus/summarize: управление какие окна в "контексте"
-    - `focus <window>` — окно развёрнуто, его content попадёт в промпт
-    - `unfocus <window>` — окно свёрнуто (summary вместо полного content)
-- [ ] Команды lifecycle через Model Channel:
-    - `list` — список с состояниями (Active/Frozen/Archived), exit code для frozen
-    - `focus <id>` / `unfocus <id>`
-    - `archive <id>` — frozen → archived (не в контексте)
-- [ ] Frozen content: хранить в RAM (Vec<String>), без записи на диск (persistence — отдельная фаза)
-- [ ] **Checkpoint**: `launch -- bash -c "echo hello && sleep 1"` → ждём → `windows` показывает frozen с exit code 0 + content "hello" → `focus 1` → content доступен
-- [ ] Тесты lifecycle с MockBackend
-- [ ] Doc-комментарии
-
-### Phase 6: Prompt Assembly
-
-Цель: вижу собранный промпт в debug output. Реальные данные из окон.
+Расширяет плоский prompt v1 из Phase 4.
 
 - [ ] `prompt/layout.rs` — PromptLayout trait + дефолтная реализация
     - Immutable layer: system prompt + mind.md
@@ -145,32 +159,25 @@ MockAgent сохраняет полученный промпт в insta снеп
 - [ ] `prompt/budget.rs` — подсчёт токенов (tiktoken-rs), бюджет слоёв
 - [ ] `prompt/assembler.rs` — сборка промпта через PromptLayout
 - [ ] `prompt/references.rs` — сбор --help/man page для окон с правом записи
-- [ ] Model Channel: команда `prompt` → показывает собранный промпт (для debug)
-- [ ] **Checkpoint**: открываю несколько окон → `prompt` → вижу полный промпт с содержимым окон, mind, budget
-- [ ] Тесты layout (mock данные, проверка структуры и бюджета)
+- [ ] Команда `prompt` в Model Channel → показывает собранный промпт (debug)
+- [ ] Обновить снепшот тесты — новая структура слоёв
+- [ ] **Checkpoint**: открываю несколько окон → `prompt` → вижу слоёный промпт с budget
 - [ ] Doc-комментарии
 
-### Phase 7: L-Model + Event Loop
+### Phase 8: Real LLM Client
 
-Цель: полный цикл. Пишу в Kitty → модель отвечает → ядро исполняет → результат виден.
+Цель: подключаем реальную модель вместо stub/mock.
 
 - [ ] `models/l_model.rs` — LLM клиент через llm crate (Claude/GPT API)
-- [ ] Расширить parser: модель отвечает markdown с code blocks (```window:mode```)
-    - Человек: plain commands через socket (из Phase 3)
-    - Модель: code blocks с обязательными window:mode
-    - Один парсер, два input format
-- [ ] `kernel/mod.rs` — main tick loop
-    - Триггеры: at_prompt (command done) / user input from Model Channel socket / idle timeout
-    - Tick: assemble → invoke model → parse response → execute blocks → wait
-    - Blocks выполняются параллельно
-- [ ] Thinking → mind.md (извлечение из extended thinking)
+    - Реализация Agent trait
+    - Thinking → mind.md (extended thinking extraction)
 - [ ] Обработка ошибок: изоляция между блоками, timeout (30с)
-- [ ] Model Channel: показывает ответы модели (prose + executed blocks) как plain text
+- [ ] Idle timeout trigger (default 60s) — статусный тик
 - [ ] User Viewport: debug view — что модель решила, что выполнилось
-- [ ] **Checkpoint**: пишу в Kitty "найди все TODO в проекте" → модель открывает окно с grep → результат виден → модель докладывает
+- [ ] **Checkpoint**: пишу в Kitty "найди все TODO" → Claude/GPT думает → открывает grep → результат → докладывает
 - [ ] Doc-комментарии
 
-### Phase 8: TUI Polish
+### Phase 9: TUI Polish
 
 Цель: полноценный интерактивный dashboard в User Viewport.
 
@@ -186,7 +193,7 @@ MockAgent сохраняет полученный промпт в insta снеп
 - [ ] Обработка горячих клавиш в User Viewport
 - [ ] **Checkpoint**: полноценная интерактивная сессия — Model Channel как REPL, User Viewport как dashboard
 
-### Phase 9: Session Persistence
+### Phase 10: Session Persistence
 
 Цель: перезапускаю `tai server` → frozen данные на месте, история сохранена.
 
@@ -194,7 +201,7 @@ MockAgent сохраняет полученный промпт в insta снеп
 - [ ] `session/snapshot.rs` — frozen content save/load на диск
 - [ ] Graceful shutdown: freeze all active → save manifest → kill Kitty
 - [ ] Recovery при старте: load manifest → reconnect/recreate windows
-- [ ] **Checkpoint**: working session с несколькими frozen окнами → Ctrl+C → `tai server` → frozen данные доступны
+- [ ] **Checkpoint**: working session с frozen окнами → Ctrl+C → `tai server` → frozen данные доступны
 - [ ] Тесты persistence (save/load round-trip)
 - [ ] Doc-комментарии
 
