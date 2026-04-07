@@ -10,7 +10,6 @@ use tracing::info;
 
 use crate::backend::{BackendCmd, CmdResponse, TerminalBackend, WindowId};
 use crate::models::Agent;
-use crate::response::parse_response;
 use crate::routing::parser;
 use crate::types::{BlockMode, ParsedSegment, Session};
 use connection::Connection;
@@ -37,9 +36,6 @@ pub enum CoreError {
 
     #[error("backend error: {0}")]
     Backend(#[from] crate::backend::BackendError),
-
-    #[error("parse error: {0}")]
-    Parse(#[from] parser::ParseError),
 
     #[error("prompt error: {0}")]
     Prompt(#[from] crate::prompt::PromptError),
@@ -95,10 +91,9 @@ impl Server {
 
         let response = self.agent.step(&prompt).await?;
 
-        let segments = parse_response(&response);
-        let results = self.execute_blocks(&segments).await;
+        let results = self.execute_blocks(&response.segments).await;
 
-        let output = format_results(&segments, &results);
+        let output = format_results(&response.segments, &results);
         self.client.write_line(&output).await?;
         Ok(())
     }

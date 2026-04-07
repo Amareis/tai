@@ -180,6 +180,16 @@ impl std::str::FromStr for BlockMode {
     }
 }
 
+impl std::fmt::Display for BlockMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlockMode::Text => f.write_str("text"),
+            BlockMode::Keys => f.write_str("keys"),
+            BlockMode::Cmd => f.write_str("cmd"),
+        }
+    }
+}
+
 /// Сегмент ответа модели после парсинга.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedSegment {
