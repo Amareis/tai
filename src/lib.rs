@@ -4,7 +4,7 @@ pub mod core;
 pub mod routing;
 pub mod types;
 
-use crate::core::{Client, Server, bind};
+use crate::core::{Client, Server, utils::bind};
 use ratatui::{init, restore};
 use std::env;
 use std::path::PathBuf;

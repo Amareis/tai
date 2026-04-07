@@ -3,7 +3,7 @@ use futures_util::stream::StreamExt;
 mod client;
 mod connection;
 pub mod model_view;
-mod utils;
+pub mod utils;
 
 pub use client::Client;
 
@@ -12,7 +12,6 @@ use ratatui::DefaultTerminal;
 use ratatui::layout::Rect;
 use ratatui::prelude::{Color, Style};
 use ratatui::widgets::Paragraph;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::backend::{CmdResponse, TerminalBackend};
@@ -24,7 +23,6 @@ use tokio::net::UnixListener;
 use tokio::select;
 use tokio::time::sleep;
 use tracing::info;
-use utils::RmFileOnDrop;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -42,17 +40,6 @@ pub struct Server<Back: TerminalBackend> {
     client: Connection,
     tui: Option<DefaultTerminal>,
     back: Back,
-}
-
-pub async fn bind(socket_path: &PathBuf) -> Result<(UnixListener, RmFileOnDrop), CoreError> {
-    if socket_path.exists() {
-        tokio::fs::remove_file(&socket_path).await?;
-    }
-
-    let listener = UnixListener::bind(socket_path)?;
-    info!("listening on {}", socket_path.display());
-
-    Ok((listener, RmFileOnDrop::new(socket_path.clone())))
 }
 
 impl<Back: TerminalBackend> Server<Back> {
