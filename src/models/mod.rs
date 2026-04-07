@@ -18,6 +18,15 @@ pub enum AgentError {
     Timeout,
 }
 
+pub struct NopAgent;
+
+#[async_trait]
+impl Agent for NopAgent {
+    async fn step(&self, _prompt: &str) -> Result<String, AgentError> {
+        Ok(String::new())
+    }
+}
+
 /// Mock-агент для тестирования.
 ///
 /// Возвращает заранее заданные ответы по очереди.

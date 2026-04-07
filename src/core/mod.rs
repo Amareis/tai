@@ -1,28 +1,26 @@
-use futures_util::FutureExt;
-use futures_util::stream::StreamExt;
-mod client;
-mod connection;
-pub mod model_view;
-pub mod utils;
-
-pub use client::Client;
-
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
-use ratatui::DefaultTerminal;
-use ratatui::layout::Rect;
-use ratatui::prelude::{Color, Style};
-use ratatui::widgets::Paragraph;
+use std::fmt::Write;
 use std::time::Duration;
 
-use crate::backend::{CmdResponse, TerminalBackend};
-use crate::routing::parser;
-use connection::Connection;
 use rustyline_async::ReadlineError;
 use thiserror::Error;
 use tokio::net::UnixListener;
 use tokio::select;
 use tokio::time::sleep;
 use tracing::info;
+
+use crate::backend::{BackendCmd, CmdResponse, TerminalBackend, WindowId};
+use crate::models::Agent;
+use crate::response::parse_response;
+use crate::routing::parser;
+use crate::types::{BlockMode, ParsedSegment, Session};
+use connection::Connection;
+
+mod client;
+mod connection;
+pub mod model_view;
+pub mod utils;
+
+pub use client::Client;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -34,84 +32,144 @@ pub enum CoreError {
 
     #[error("readline error: {0}")]
     Readline(#[from] ReadlineError),
+
+    #[error("agent error: {0}")]
+    Agent(#[from] crate::models::AgentError),
+
+    #[error("backend error: {0}")]
+    Backend(#[from] crate::backend::BackendError),
+
+    #[error("parse error: {0}")]
+    Parse(#[from] parser::ParseError),
+
+    #[error("prompt error: {0}")]
+    Prompt(#[from] crate::prompt::PromptError),
 }
 
-pub struct Server<Back: TerminalBackend> {
+pub struct Server {
     client: Connection,
-    tui: Option<DefaultTerminal>,
-    back: Back,
+    back: Box<dyn TerminalBackend>,
+    session: Session,
+    agent: Box<dyn Agent>,
 }
 
-impl<Back: TerminalBackend> Server<Back> {
+impl Server {
     pub async fn accept(
-        tui: Option<DefaultTerminal>,
-        back: Back,
         unix_listener: &UnixListener,
+        back: Box<dyn TerminalBackend>,
+        session: Session,
+        agent: Box<dyn Agent>,
     ) -> Result<Self, CoreError> {
-        Connection::accept(unix_listener)
-            .await
-            .map(|client| Self { client, tui, back })
+        Connection::accept(unix_listener).await.map(|client| Self {
+            client,
+            back,
+            session,
+            agent,
+        })
     }
 
     pub async fn run(&mut self) -> Result<(), CoreError> {
-        let Server { client, .. } = self;
-
-        client
+        self.client
             .write_line("════════════════════════════════════════════════════════════")
             .await?;
-        client
+        self.client
             .write_line("STATE: Active 0 | Frozen 0 | Tokens: 0")
             .await?;
-        client
+        self.client
             .write_line("════════════════════════════════════════════════════════════")
             .await?;
-        client.write_line("").await?;
-        client
+        self.client.write_line("").await?;
+        self.client
             .write_line("TAI Server ready. Type commands in this window.")
             .await?;
-        client.write_line("").await?;
+        self.client.write_line("").await?;
 
         info!("model viewport initialized");
+
+        self.tick().await?;
 
         self.tui_loop().await
     }
 
-    async fn tui_loop(&mut self) -> Result<(), CoreError> {
-        let Server { client, tui, back } = self;
+    async fn tick(&mut self) -> Result<(), CoreError> {
+        let prompt = crate::prompt::build(&self.session, self.back.as_ref(), None).await?;
 
+        let response = self.agent.step(&prompt).await?;
+
+        let segments = parse_response(&response);
+        let results = self.execute_blocks(&segments).await;
+
+        let output = format_results(&segments, &results);
+        self.client.write_line(&output).await?;
+        Ok(())
+    }
+
+    async fn execute_blocks(&mut self, segments: &[ParsedSegment]) -> Vec<BlockResult> {
+        let mut results = Vec::new();
+
+        for segment in segments {
+            if let ParsedSegment::Block {
+                window,
+                mode,
+                content,
+            } = segment
+            {
+                let result = self.execute_block(window, mode, content).await;
+                results.push(result);
+            }
+        }
+
+        results
+    }
+
+    async fn execute_block(
+        &mut self,
+        window: &str,
+        mode: &BlockMode,
+        content: &str,
+    ) -> BlockResult {
+        match mode {
+            BlockMode::Text => {
+                let cmd = BackendCmd::Send(crate::backend::SendTextCmd {
+                    window: WindowId(window.to_string()),
+                    text: vec![content.to_string()],
+                });
+                self.execute_backend_cmd(cmd, window).await
+            }
+            BlockMode::Keys => {
+                let keys: Vec<String> = content.split_whitespace().map(String::from).collect();
+                let cmd = BackendCmd::Keys(crate::backend::SendKeysCmd {
+                    window: WindowId(window.to_string()),
+                    keys,
+                });
+                self.execute_backend_cmd(cmd, window).await
+            }
+            BlockMode::Cmd => match parser::parse(content) {
+                Ok(cmd) => self.execute_backend_cmd(cmd, "tai").await,
+                Err(e) => BlockResult::Error("tai".to_string(), e.to_string()),
+            },
+        }
+    }
+
+    async fn execute_backend_cmd(&mut self, cmd: BackendCmd, target: &str) -> BlockResult {
+        match self.back.execute(cmd).await {
+            Ok(CmdResponse::WindowCreated(id)) => BlockResult::Created(id),
+            Ok(CmdResponse::Text(text)) => BlockResult::Text(target.to_string(), text),
+            Ok(CmdResponse::Windows(windows)) => {
+                BlockResult::List(target.to_string(), windows.len())
+            }
+            Ok(CmdResponse::Ok) => BlockResult::Ok(target.to_string()),
+            Ok(CmdResponse::Error(e)) => BlockResult::Error(target.to_string(), e),
+            Err(e) => BlockResult::Error(target.to_string(), e.to_string()),
+        }
+    }
+
+    async fn tui_loop(&mut self) -> Result<(), CoreError> {
         let mut exit = false;
 
-        let mut events = EventStream::new();
-
         while !exit {
-            if let Some(tm) = tui {
-                let _ = tm.draw(|f| {
-                    let area = Rect::new(0, 0, f.area().width, f.area().height);
-                    f.render_widget(
-                        Paragraph::new("TAI Server (User Viewport)\n\nPress ESC or Ctrl+C to exit")
-                            .style(Style::default().fg(Color::Green)),
-                        area,
-                    );
-                });
-            }
-            let event = events.next().fuse();
             select! {
-                tui_event = event => {
-                    match tui_event {
-                        Some(Ok(Event::Key(key))) => {
-                            if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
-                                exit = true;
-                            }
-                            if key.code == KeyCode::Esc {
-                                exit = true;
-                            }
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(e)) => tracing::error!("Tui events error: {:?}", e),
-                        None => break,
-                    }
-                }
-                should_exit = client_loop(client, back) => {
+                should_exit = client_loop(&mut self.client, self.back.as_mut()) => {
                     match should_exit {
                         Ok(e) => {exit = e}
                         Err(e) => {
@@ -127,9 +185,55 @@ impl<Back: TerminalBackend> Server<Back> {
     }
 }
 
+enum BlockResult {
+    Created(WindowId),
+    Text(String, String),
+    List(String, usize),
+    Ok(String),
+    Error(String, String),
+}
+
+fn format_results(segments: &[ParsedSegment], results: &[BlockResult]) -> String {
+    let mut output = String::new();
+
+    for segment in segments {
+        if let ParsedSegment::Prose(text) = segment {
+            if !output.is_empty() {
+                output.push('\n');
+            }
+            output.push_str(text);
+        }
+    }
+
+    for result in results {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        match result {
+            BlockResult::Created(id) => {
+                let _ = write!(output, "[created] {id}");
+            }
+            BlockResult::Text(target, text) => {
+                let _ = write!(output, "[{target}] {text}");
+            }
+            BlockResult::List(target, count) => {
+                let _ = write!(output, "[{target}] {count} windows");
+            }
+            BlockResult::Ok(target) => {
+                let _ = write!(output, "[{target}] OK");
+            }
+            BlockResult::Error(target, e) => {
+                let _ = write!(output, "[{target}] Error: {e}");
+            }
+        }
+    }
+
+    output
+}
+
 async fn client_loop(
     client: &mut Connection,
-    back: &mut impl TerminalBackend,
+    back: &mut dyn TerminalBackend,
 ) -> Result<bool, CoreError> {
     if let Some(line) = client.read_line().await? {
         info!("received from model channel: {}", line);

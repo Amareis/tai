@@ -1,7 +1,6 @@
 pub mod backend;
 pub mod config;
 pub mod core;
-pub mod kernel;
 pub mod models;
 pub mod prompt;
 pub mod response;
@@ -9,18 +8,11 @@ pub mod routing;
 pub mod types;
 
 use crate::core::{Client, Server, utils::bind};
-use ratatui::{init, restore};
+use crate::models::NopAgent;
+use crate::types::Session;
 use std::env;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
-
-struct RestoreTerm;
-
-impl Drop for RestoreTerm {
-    fn drop(&mut self) {
-        restore();
-    }
-}
 
 /// Запуск TAI сервера: User viewport + Kitty + Model viewport.
 pub async fn run_server(
@@ -31,12 +23,6 @@ pub async fn run_server(
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("tai=info".parse()?))
         .init();
-
-    let (tm, _restore) = if debug {
-        (None, None)
-    } else {
-        (Some(init()), Some(RestoreTerm))
-    };
 
     let uuid = uuid::Uuid::new_v4();
     let kitty_socket = env::temp_dir().join(format!("tai-kitty-{}.sock", &uuid));
@@ -65,11 +51,18 @@ pub async fn run_server(
 
     let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
-    let kitty = backend::kitty::KittyBackend::spawn(&args_refs, &kitty_socket, hidden).await?;
+    let kitty =
+        Box::new(backend::kitty::KittyBackend::spawn(&args_refs, &kitty_socket, hidden).await?);
 
     tracing::info!("kitty spawned, socket: {}", kitty_socket.display());
 
-    let mut server = Server::accept(tm, kitty, &listener).await?;
+    let session = Session::new(
+        uuid.to_string(),
+        env::temp_dir().join(format!("tai-mind-{}.md", &uuid)),
+    );
+    let agent = Box::new(NopAgent);
+
+    let mut server = Server::accept(&listener, kitty, session, agent).await?;
     let _ = server.run().await;
 
     Ok(())
