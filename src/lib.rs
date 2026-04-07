@@ -1,6 +1,10 @@
 pub mod backend;
 pub mod config;
 pub mod core;
+pub mod kernel;
+pub mod models;
+pub mod prompt;
+pub mod response;
 pub mod routing;
 pub mod types;
 

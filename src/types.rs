@@ -153,3 +153,42 @@ pub enum TickTrigger {
     /// Прошёл idle-timeout без событий
     IdleTimeout,
 }
+
+/// Режим code block в ответе модели.
+///
+/// Определяет как именно содержимое блока будет отправлено в окно.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockMode {
+    /// Текст в stdin окна (`send-text`)
+    Text,
+    /// Клавиши в окно (`send-key`)
+    Keys,
+    /// Команда ядра TAI (`tai:cmd`)
+    Cmd,
+}
+
+impl std::str::FromStr for BlockMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "text" => Ok(Self::Text),
+            "keys" => Ok(Self::Keys),
+            "cmd" | "tai:cmd" => Ok(Self::Cmd),
+            _ => Err(format!("unknown block mode: {s}")),
+        }
+    }
+}
+
+/// Сегмент ответа модели после парсинга.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedSegment {
+    /// Code block: ` ```window:mode\ncontent\n``` `
+    Block {
+        window: String,
+        mode: BlockMode,
+        content: String,
+    },
+    /// Текст вне блоков — prose в чат
+    Prose(String),
+}
