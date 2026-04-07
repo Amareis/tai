@@ -17,7 +17,6 @@ use connection::Connection;
 
 mod client;
 mod connection;
-pub mod model_view;
 pub mod utils;
 
 pub use client::Client;
