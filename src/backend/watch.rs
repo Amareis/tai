@@ -1,76 +1,59 @@
-use std::collections::HashSet;
-use std::future::Future;
-use std::time::Duration;
+use std::collections::HashMap;
 
-use tokio::time;
+use chrono::Utc;
+use tracing::info;
 
-use crate::backend::{
-    BackendCmd, BackendError, CloseCmd, CmdResponse, GetTextCmd, TerminalBackend, WindowId,
-};
+use crate::backend::{BackendCmd, BackendError, CloseCmd, CmdResponse, GetTextCmd, TerminalBackend, WindowId};
+use crate::types::{Session, Window, WindowState};
 
-/// Событие завершения окна — процесс дошёл до prompt.
 #[derive(Debug, Clone)]
-pub struct WindowExitedEvent {
-    pub window_id: WindowId,
-    pub content: String,
+pub enum WatchEvent {
+    WindowAdded { window_id: String },
+    WindowExited { window_id: String, exit_code: i32 },
 }
 
-/// Process watch — периодический опрос backend для обнаружения завершившихся окон.
-///
-/// Kitty запускает окна с `--hold`, поэтому при завершении процесса окно переходит
-/// в состояние "at prompt". `ProcessWatch` опрашивает `list_windows` каждые `poll_interval`
-/// и для окон с `at_prompt == true`:
-/// 1. Захватывает содержимое через `get_text`
-/// 2. Закрывает окно через `close`
-/// 3. Возвращает `WindowExitedEvent` с захваченным выводом
-///
-/// Тrack-множество содержит `WindowId` окон, за которыми ведётся наблюдение.
-pub struct ProcessWatch<B: TerminalBackend> {
-    backend: B,
-    tracked: HashSet<WindowId>,
-    poll_interval: Duration,
+struct TrackedWindow {
+    title: String,
+    added_to_session: bool,
 }
 
-impl<B: TerminalBackend> ProcessWatch<B> {
-    pub fn new(backend: B, poll_interval: Duration) -> Self {
+pub struct Watcher {
+    tracked: HashMap<WindowId, TrackedWindow>,
+}
+
+impl Default for Watcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Watcher {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
-            backend,
-            tracked: HashSet::new(),
-            poll_interval,
+            tracked: HashMap::new(),
         }
     }
 
-    /// Добавить окно в список отслеживаемых.
-    pub fn track(&mut self, window_id: WindowId) {
-        self.tracked.insert(window_id);
+    pub fn track(&mut self, backend_id: WindowId, title: String) {
+        info!("watcher: tracking {backend_id} ({title})");
+        self.tracked.insert(backend_id, TrackedWindow {
+            title,
+            added_to_session: false,
+        });
     }
 
-    /// Убрать окно из списка отслеживаемых.
-    pub fn untrack(&mut self, window_id: &WindowId) {
-        self.tracked.remove(window_id);
-    }
-
-    /// Сколько окон отслеживается.
-    pub fn tracked_count(&self) -> usize {
-        self.tracked.len()
-    }
-
-    /// Проверить, отслеживается ли окно.
-    pub fn is_tracked(&self, window_id: &WindowId) -> bool {
-        self.tracked.contains(window_id)
-    }
-
-    /// Один цикл опроса — проверить все отслеживаемые окна.
-    ///
-    /// Возвращает список завершившихся окон с захваченным выводом.
-    /// Завершённые окна автоматически удаляются из track-множества.
-    pub async fn poll(&mut self) -> Result<Vec<WindowExitedEvent>, BackendError> {
+    pub async fn poll(
+        &mut self,
+        back: &dyn TerminalBackend,
+        session: &mut Session,
+    ) -> Result<Vec<WatchEvent>, BackendError> {
         if self.tracked.is_empty() {
             return Ok(Vec::new());
         }
 
-        let all_windows = match self.backend.execute(BackendCmd::List).await? {
-            CmdResponse::Windows(windows) => windows,
+        let all_windows = match back.execute(BackendCmd::List).await? {
+            CmdResponse::Windows(w) => w,
             CmdResponse::Error(e) => return Err(BackendError::Communication(e)),
             _ => {
                 return Err(BackendError::Communication(
@@ -79,88 +62,83 @@ impl<B: TerminalBackend> ProcessWatch<B> {
             }
         };
 
-        let at_prompt_ids: HashSet<WindowId> = all_windows
-            .into_iter()
-            .filter(|w| w.is_at_prompt && self.tracked.contains(&w.id))
-            .map(|w| w.id)
+        let window_map: HashMap<&WindowId, &crate::backend::WindowInfo> = all_windows
+            .iter()
+            .map(|w| (&w.id, w))
             .collect();
 
-        if at_prompt_ids.is_empty() {
-            return Ok(Vec::new());
+        let mut to_add = Vec::new();
+        let mut to_freeze = Vec::new();
+
+        for (backend_id, tracked) in &self.tracked {
+            if let Some(info) = window_map.get(backend_id) {
+                if !tracked.added_to_session {
+                    to_add.push((backend_id.clone(), info.pid, tracked.title.clone()));
+                } else if info.is_at_prompt {
+                    to_freeze.push((backend_id.clone(), info.last_cmd_exit_status));
+                }
+            }
         }
 
         let mut events = Vec::new();
-        let mut to_remove = Vec::new();
 
-        for window_id in &at_prompt_ids {
-            let content = match self
-                .backend
-                .execute(BackendCmd::Get(GetTextCmd {
-                    window: window_id.clone(),
-                }))
-                .await
-            {
-                Ok(CmdResponse::Text(text)) => text,
-                Ok(_) => String::new(),
-                Err(e) => {
-                    tracing::warn!("get_text failed for window {}: {}", window_id, e);
-                    String::new()
-                }
-            };
+        for (backend_id, pid, title) in to_add {
+            let window = Window::new_active(backend_id.0.clone(), pid, title);
+            let window_id = window.id.clone();
+            session.windows.push(window);
 
-            if let Err(e) = self
-                .backend
-                .execute(BackendCmd::Close(CloseCmd {
-                    window: window_id.clone(),
-                }))
-                .await
-            {
-                tracing::warn!("close failed for window {}: {}", window_id, e);
+            if let Some(t) = self.tracked.get_mut(&backend_id) {
+                t.added_to_session = true;
             }
 
-            events.push(WindowExitedEvent {
-                window_id: window_id.clone(),
-                content,
-            });
-
-            to_remove.push(window_id.clone());
+            info!("watcher: added window {window_id} (backend {backend_id})");
+            events.push(WatchEvent::WindowAdded { window_id });
         }
 
-        for id in to_remove {
-            self.tracked.remove(&id);
+        for (backend_id, exit_code) in to_freeze {
+            let content = back
+                .execute(BackendCmd::Get(GetTextCmd {
+                    window: backend_id.clone(),
+                }))
+                .await
+                .map(|r| match r {
+                    CmdResponse::Text(t) => t,
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+
+            let exit_code = exit_code.unwrap_or(-1);
+
+            if let Some(w) = session.windows.iter_mut().find(|w| {
+                matches!(&w.state, WindowState::Active { backend_id: bid, .. } if bid == &backend_id.0)
+            }) {
+                w.state = WindowState::Frozen {
+                    content,
+                    exit_code,
+                    captured_at: Utc::now(),
+                };
+                let wid = w.id.clone();
+                info!("watcher: froze window {wid} (exit_code={exit_code})");
+                events.push(WatchEvent::WindowExited { window_id: wid, exit_code });
+            }
+
+            let _ = back
+                .execute(BackendCmd::Close(CloseCmd {
+                    window: backend_id.clone(),
+                }))
+                .await;
+
+            self.tracked.remove(&backend_id);
         }
 
         Ok(events)
-    }
-
-    /// Бесконечный цикл опроса. Вызывает `handler` для каждого завершившегося окна.
-    ///
-    /// Прерывается при ошибке связи с backend (возвращает ошибку).
-    pub async fn run<F, Fut>(&mut self, handler: F) -> Result<(), BackendError>
-    where
-        F: Fn(WindowExitedEvent) -> Fut,
-        Fut: Future<Output = ()>,
-    {
-        let mut interval = time::interval(self.poll_interval);
-
-        loop {
-            interval.tick().await;
-
-            let events = self.poll().await?;
-
-            for event in events {
-                handler(event).await;
-            }
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{
-        BackendCmd, BackendError, CmdResponse, TerminalBackend, WindowId, WindowInfo,
-    };
+    use crate::backend::{BackendCmd, BackendError, CmdResponse, TerminalBackend, WindowId, WindowInfo};
     use async_trait::async_trait;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -175,6 +153,7 @@ mod tests {
         id: WindowId,
         title: String,
         at_prompt: bool,
+        last_cmd_exit_status: Option<i32>,
         text: String,
     }
 
@@ -192,6 +171,18 @@ mod tests {
                 id: WindowId(id.to_string()),
                 title: id.to_string(),
                 at_prompt,
+                last_cmd_exit_status: None,
+                text: text.to_string(),
+            });
+        }
+
+        fn add_window_with_exit(&self, id: &str, at_prompt: bool, text: &str, exit_code: i32) {
+            let mut windows = self.windows.lock().unwrap();
+            windows.push(MockWindow {
+                id: WindowId(id.to_string()),
+                title: id.to_string(),
+                at_prompt,
+                last_cmd_exit_status: Some(exit_code),
                 text: text.to_string(),
             });
         }
@@ -203,6 +194,7 @@ mod tests {
             }
         }
     }
+
     #[async_trait]
     impl TerminalBackend for MockBackend {
         async fn execute(&self, cmd: BackendCmd) -> Result<CmdResponse, BackendError> {
@@ -237,6 +229,7 @@ mod tests {
                                 title: w.title.clone(),
                                 pid: 1,
                                 is_at_prompt: w.at_prompt,
+                                last_cmd_exit_status: w.last_cmd_exit_status,
                             })
                             .collect(),
                     ))
@@ -245,74 +238,77 @@ mod tests {
         }
     }
 
+    fn empty_session() -> Session {
+        Session::new("test".to_string(), std::env::temp_dir().join("tai-test-mind.md"))
+    }
+
     #[tokio::test]
     async fn test_poll_empty_tracked() {
         let backend = MockBackend::new();
-        let mut watch = ProcessWatch::new(backend, Duration::from_millis(50));
+        let mut watcher = Watcher::new();
+        let mut session = empty_session();
 
-        let events = watch.poll().await.unwrap();
+        let events = watcher.poll(&backend, &mut session).await.unwrap();
         assert!(events.is_empty());
     }
 
     #[tokio::test]
-    async fn test_poll_no_at_prompt() {
+    async fn test_poll_adds_window_to_session() {
         let backend = MockBackend::new();
         backend.add_window("w1", false, "running...");
 
-        let mut watch = ProcessWatch::new(backend, Duration::from_millis(50));
-        watch.track(WindowId("w1".to_string()));
+        let mut watcher = Watcher::new();
+        let mut session = empty_session();
+        watcher.track(WindowId("w1".to_string()), "hello".to_string());
 
-        let events = watch.poll().await.unwrap();
-        assert!(events.is_empty());
-        assert_eq!(watch.tracked_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_poll_detects_at_prompt() {
-        let backend = MockBackend::new();
-        backend.add_window("w1", true, "hello world\n$ ");
-
-        let mut watch = ProcessWatch::new(backend, Duration::from_millis(50));
-        watch.track(WindowId("w1".to_string()));
-
-        let events = watch.poll().await.unwrap();
+        let events = watcher.poll(&backend, &mut session).await.unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].window_id.0, "w1");
-        assert!(events[0].content.contains("hello world"));
-        assert_eq!(watch.tracked_count(), 0);
+        assert!(matches!(&events[0], WatchEvent::WindowAdded { window_id } if !window_id.is_empty()));
+
+        assert_eq!(session.windows.len(), 1);
+        assert!(session.windows[0].state.is_active());
     }
 
     #[tokio::test]
-    async fn test_poll_untrack_on_exit() {
+    async fn test_poll_freezes_on_exit() {
         let backend = MockBackend::new();
-        backend.add_window("w1", true, "done");
-        backend.add_window("w2", false, "still running");
+        backend.add_window_with_exit("w1", true, "hello world", 0);
 
-        let mut watch = ProcessWatch::new(backend, Duration::from_millis(50));
-        watch.track(WindowId("w1".to_string()));
-        watch.track(WindowId("w2".to_string()));
+        let mut watcher = Watcher::new();
+        let mut session = empty_session();
+        watcher.track(WindowId("w1".to_string()), "hello".to_string());
 
-        let events = watch.poll().await.unwrap();
+        // first poll: add to session
+        let events = watcher.poll(&backend, &mut session).await.unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(watch.tracked_count(), 1);
-        assert!(watch.tracked.contains(&WindowId("w2".to_string())));
-    }
-
-    #[tokio::test]
-    async fn test_poll_late_at_prompt() {
-        let backend = MockBackend::new();
-        backend.add_window("w1", false, "running...");
-
-        let mut watch = ProcessWatch::new(backend.clone(), Duration::from_millis(50));
-        watch.track(WindowId("w1".to_string()));
-
-        let events = watch.poll().await.unwrap();
-        assert!(events.is_empty());
+        assert!(session.windows[0].state.is_active());
 
         backend.set_at_prompt("w1", true);
 
-        let events = watch.poll().await.unwrap();
+        // second poll: freeze
+        let events = watcher.poll(&backend, &mut session).await.unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].content, "running...");
+        assert!(matches!(&events[0], WatchEvent::WindowExited { exit_code: 0, .. }));
+        assert!(session.windows[0].state.is_frozen());
+    }
+
+    #[tokio::test]
+    async fn test_poll_no_at_prompt_stays_active() {
+        let backend = MockBackend::new();
+        backend.add_window("w1", false, "running...");
+
+        let mut watcher = Watcher::new();
+        let mut session = empty_session();
+        watcher.track(WindowId("w1".to_string()), "hello".to_string());
+
+        // first poll: add
+        let events = watcher.poll(&backend, &mut session).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(session.windows[0].state.is_active());
+
+        // second poll: still running (not at prompt)
+        let events = watcher.poll(&backend, &mut session).await.unwrap();
+        assert!(events.is_empty());
+        assert!(session.windows[0].state.is_active());
     }
 }

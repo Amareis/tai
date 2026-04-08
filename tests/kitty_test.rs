@@ -196,8 +196,9 @@ async fn set_title() {
 }
 
 #[tokio::test]
-async fn process_watch_detects_exit() {
-    use tai::backend::watch::ProcessWatch;
+async fn watcher_detects_exit() {
+    use tai::backend::watch::Watcher;
+    use tai::types::Session;
 
     let backend = spawn_backend().await;
 
@@ -213,27 +214,24 @@ async fn process_watch_detects_exit() {
         .await
         .expect("launch should succeed") else { panic!("expected WindowCreated") };
 
-    let mut watch: ProcessWatch<KittyBackend> =
-        ProcessWatch::new(backend, Duration::from_millis(200));
-    watch.track(window_id.clone());
+    let mut watcher = Watcher::new();
+    let mut session = Session::new("test".to_string(), std::env::temp_dir().join("tai-test-mind.md"));
+    watcher.track(window_id.clone(), "test-watch".to_string());
 
-    let mut events = Vec::new();
+    let mut detected = false;
     for _ in 0..30 {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let result = watch.poll().await.expect("poll should work");
-        events.extend(result);
-        if !watch.is_tracked(&window_id) {
+        let events = watcher.poll(&backend, &mut session).await.expect("poll should work");
+        for event in &events {
+            if let tai::backend::watch::WatchEvent::WindowExited { .. } = event {
+                detected = true;
+            }
+        }
+        if detected {
             break;
         }
     }
 
-    assert!(
-        !events.is_empty(),
-        "should detect at_prompt for exited window"
-    );
-    assert!(
-        events[0].content.contains("quick-exit"),
-        "captured content should contain output, got: {:?}",
-        events[0].content
-    );
+    assert!(detected, "should detect window exit");
+    assert!(session.windows.iter().any(|w| w.state.is_frozen()), "window should be frozen in session");
 }

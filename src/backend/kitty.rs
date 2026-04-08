@@ -155,8 +155,11 @@ impl TerminalBackend for KittyBackend {
 impl KittyBackend {
     async fn cmd_launch(&self, cmd: &LaunchCmd) -> Result<WindowId, BackendError> {
         let title = cmd.title.as_deref().unwrap_or("tai");
+        let command_str = shell_words::join(&cmd.command);
+        let wrapped = format!("bash -c {}", shell_words::quote(&command_str));
+        let args: Vec<String> = wrapped.split_whitespace().map(String::from).collect();
         let msg = LaunchCommand::new()
-            .args(cmd.command.clone())
+            .args(&args)
             .window_title(title)
             .hold(true)
             .keep_focus(true)
@@ -313,12 +316,14 @@ impl KittyBackend {
                     #[allow(clippy::cast_possible_truncation)]
                     let pid = win.pid.map_or(0, |p| p as u32);
                     let is_at_prompt = win.at_prompt.unwrap_or(false);
+                    let last_cmd_exit_status = win.last_cmd_exit_status;
 
                     result.push(WindowInfo {
                         id,
                         title,
                         pid,
                         is_at_prompt,
+                        last_cmd_exit_status,
                     });
                 }
             }

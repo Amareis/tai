@@ -37,6 +37,8 @@ pub struct WindowInfo {
     pub title: String,
     pub pid: u32,
     pub is_at_prompt: bool,
+    /// Код завершения последней команды (доступно только для bash-обёрток через `last_cmd_exit_status`)
+    pub last_cmd_exit_status: Option<i32>,
 }
 
 /// Команда для запуска нового терминального окна.
