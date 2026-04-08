@@ -1,5 +1,5 @@
 use crate::backend::{BackendCmd, CmdResponse, GetTextCmd, TerminalBackend, WindowId};
-use crate::models::AgentResponse;
+use crate::agent::AgentResponse;
 use crate::types::{ParsedSegment, Session, Window, WindowState};
 
 const SYSTEM_PROMPT: &str = "You are TAI, a terminal agent. You control terminal windows.
@@ -13,7 +13,7 @@ Text outside blocks goes to chat.
 
 When a process finishes (exit code shown), analyze the result and decide next steps.";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Prompt {
     pub system: String,
     pub dashboard: Vec<WindowSummary>,
@@ -46,7 +46,7 @@ pub struct WindowView {
     pub exit_code: Option<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StatusInfo {
     pub active: usize,
     pub frozen: usize,

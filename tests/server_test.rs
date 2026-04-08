@@ -1,10 +1,11 @@
 #![cfg(test)]
 
+use assert_matches::assert_matches;
 use tai::backend::kitty::KittyBackend;
 use tai::core::utils::bind;
 use tai::core::Server;
-use tai::models::{AgentResponse, TestAgent};
-use tai::prompt::Prompt;
+use tai::agent::{TestAgent, AgentResponse};
+use tai::prompt::{Prompt, WindowStateKind};
 use tai::types::{BlockMode, Session};
 
 fn empty_session() -> Session {
@@ -66,8 +67,10 @@ async fn tick_agent_launches_window_and_session_tracks_it() {
         )
         .step(
             |prompt: &Prompt| {
-                assert_eq!(prompt.dashboard.len(), 1, "session should track launched window");
-                assert_eq!(prompt.dashboard[0].title, "hello");
+                let w = prompt.dashboard.first().expect("session should track launched window");
+                assert_eq!(w.title, "hello");
+                assert_matches!(w.state_kind, WindowStateKind::Frozen {exit_code: 0}, "Window should be closed");
+
             },
             AgentResponse::empty(),
         );

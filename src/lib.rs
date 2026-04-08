@@ -1,14 +1,14 @@
 pub mod backend;
 pub mod config;
 pub mod core;
-pub mod models;
+pub mod agent;
 pub mod prompt;
 pub mod response;
 pub mod routing;
 pub mod types;
 
 use crate::core::{Client, Server, utils::bind};
-use crate::models::NopAgent;
+use crate::agent::NopAgent;
 use crate::types::Session;
 use std::env;
 use std::path::PathBuf;
