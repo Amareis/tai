@@ -28,211 +28,148 @@
 
 ### Phase 2: Unix Socket + Minimal Dual Interface ✅
 
-Цель: `tai server` → Kitty открывается → оба интерфейа работают.
+Цель: `tai server` → Kitty открывается → оба интерфейса работают.
 
 - [x] `client/mod.rs` — Unix Domain Socket server (в kernel) + client
-    - Server: listen на сокете, accept, newline-delimited text protocol
-    - Client: connect, stdin→socket (строки ввода), socket→stdout (строки вывода)
-    - Client — ~50 строк, rustyline-async ↔ socket proxy (история команд, навигация по словам)
 - [x] `client/model_view.rs` — текстовый вывод в socket
-    - State header (окна, токены, focus) — просто строки текста
-    - НЕ ratatui, НЕ ANSI форматирование — просто writeln в socket
-    - Новые строки дописываются, никаких clear screen
-- [x] Обновить `main.rs` — clap subcommands:
-    - `tai server [--socket PATH] [--hidden]` — ratatui User Viewport на stdout,
-      spawn Kitty с `kitty -- tai client --socket PATH`, ждёт socket connection
-    - `tai client --socket PATH` — подключиться к сокету, stdin↔socket↔stdout, sleep
+- [x] Обновить `main.rs` — clap subcommands
 - [x] User Viewport: минимальный ratatui — "TAI Server (User Viewport)"
 - [x] Model Channel: "TAI Model Workspace" через socket
-- [x] **Checkpoint**: запускаю `tai server` → Kitty открывается → оба окна показывают текст → набираю текст в Kitty → server получает строку
-- [ ] Doc-комментарии
+- [x] **Checkpoint**: запускаю `tai server` → Kitty открывается → оба окна показывают текст
 
 ### Phase 3: Command Parser + Window Operations ✅
 
-Цель: печатаю `launch bash` в Kitty окно → появляется новое окно → вижу в User Viewport.
+- [x] `backend/mod.rs` — `BackendCmd` + `CmdResponse` + структуры команд
+- [x] `TerminalBackend` trait: `async fn execute(&self, cmd: BackendCmd) -> Result<CmdResponse>`
+- [x] `KittyBackend::execute()` — dispatch по BackendCmd
+- [x] `routing/parser.rs` — clap-based парсер текстовых команд
+- [x] Чтение ввода из Model Channel → clap parser → dispatch
+- [x] Тесты парсера (16 тестов)
+- [x] **Checkpoint**: в Kitty окне набираю `launch bash` → появляется окно → `list` → `close`
 
-- [x] `backend/mod.rs` — `BackendCmd` enum + `CmdResponse` enum + отдельные структуры команд
-    - LaunchCmd, SendTextCmd, SendKeysCmd, GetTextCmd, CloseCmd, SetTitleCmd
-    - BackendCmd: Launch(LaunchCmd), SendText(SendTextCmd), SendKeys(SendKeysCmd), GetText(GetTextCmd), Close(CloseCmd), List, SetTitle(SetTitleCmd)
-    - CmdResponse: WindowCreated(WindowId), Text(String), Windows(Vec<WindowInfo>), Ok, Error(String)
-- [x] Обновить `TerminalBackend` trait: один метод `async fn execute(&self, cmd: BackendCmd) -> Result<CmdResponse>`
-- [x] Реализовать `execute()` в `KittyBackend` — dispatch по вариантам BackendCmd
-- [x] `routing/parser.rs` — clap-based парсер текстовых команд из Model Channel
-    - Reuse clap (уже в зависимостях для `tai server`/`tai client`)
-    - Subcommands: `launch [--title NAME] -- <cmd>`, `send <window> <text...>`, `keys <window> <keys...>`, `get <window>`, `close <window>`, `list`, `title <window> <title>`
-    - `clap::try_parse_from()` → `BackendCmd` или сразу error feedback
-    - Валидация: launch требует непустую команду
-- [x] Чтение ввода из Model Channel (socket lines → clap parser → dispatch)
-- [x] Dispatch: BackendCmd → backend.execute() (единый метод trait'а)
-- [x] Model Channel: результат команды (текстовый feedback: "Window created: 123")
-- [x] Тесты парсера (16 тестов: валидные/невалидные команды, clap error messages)
-- [x] Тесты ProcessWatch обновлены для нового API
-- [x] **Checkpoint**: в Kitty окне набираю `launch bash` → появляется Kitty tab → `list` → вижу оба окна → `close 1` → окно закрылось
-- [x] Doc-комментарии
-- [x] Debug mode (`--debug`): TUI не рисуется, только логи
+### Phase 4: MVP — Tick Cycle (в процессе)
 
-User Viewport отложен до Phase 9 — окна видны напрямую в терминале.
+Цель: первый полный цикл. Модель получает структурированный промпт, возвращает структурированный ответ, ядро исполняет, сессия отслеживает окна.
 
-### Phase 4: MVP — Minimal Tick Cycle
+#### Готово:
 
-Цель: первый полный тик. Пишу в Kitty → (mock) модель отвечает → ядро парсит → исполняет → результат виден.
+- [x] `models/mod.rs` — trait `Agent`
+    - `async fn step(&self, prompt: &Prompt) -> Result<AgentResponse, AgentError>`
+    - Принимает структурированный `Prompt`, возвращает структурированный `AgentResponse`
+- [x] `prompt/mod.rs` — `Prompt` struct
+    - `system`, `dashboard` (Vec<WindowSummary>), `focused_windows` (Vec<WindowView>), `previous_response`, `status` (StatusInfo)
+    - `Prompt::to_text()` для рендеринга в текст (реальные LLM-агенты)
+- [x] `models/mod.rs` — `AgentResponse` struct
+    - `segments: Vec<ParsedSegment>` + builder-методы: `empty()`, `prose()`, `block()`, `and()`
+- [x] `models/mod.rs` — `NopAgent` (пустой ответ), `MockAgent` (очередь ответов), `TestAgent` (пошаговая проверка)
+    - TestAgent: `.step(check_fn, response).step(...)` + `assert_all_consumed()`
+- [x] `response/mod.rs` — парсинг code blocks из текста в `ParsedSegment`
+- [x] `Server` в `core/mod.rs` — tick, execute_blocks, execute_block
+- [x] Server владеет `Box<dyn Agent>`, `Session`, `Box<dyn TerminalBackend>`
+- [x] `Server::accept(back, session, agent, listener)` — всё приходит снаружи
+- [x] E2E тест: `tick_empty_session` — пустая сессия, TestAgent проверяет структуру промпта ✅
 
-Вытаскиваем минимум из будущих Phase 5-7 — ровно столько чтобы тик работал.
-Всё упрощённое: плоский промпт, базовый lifecycle, без бюджета/слоёв.
+#### Осталось (TDD — тест уже написан, падает):
 
-- [ ] `models/mod.rs` — trait `Agent`
-    - `async fn step(&self, prompt: &str) -> Result<String>` — получает промпт, возвращает ответ
-    - Пока без реальной реализации — Agent trait + минимальный stub
-- [ ] Prompt v1 (плоский, без слоёв/budget):
-    - system prompt (захардкоженный) + dashboard (список окон) + focused content (get-text)
-    - Предыдущий ответ модели перед текущими наблюдениями
-    - Собирается одной функцией, без trait abstraction
-- [ ] Парсинг ответа модели (code blocks):
-    - Regex для ` ```window:mode\ncontent\n``` ` → `ParsedSegment::Block / Prose / Invalid`
-    - Режимы: text, keys, cmd (tai:cmd)
-- [ ] Window lifecycle v1 (минимальный):
-    - Active → Frozen: at_prompt → get-text → content + exit code → close
-    - Frozen content в RAM, без диска
-    - Триггер: at_prompt (process done) → freeze → следующий тик
-- [ ] Tick loop (`kernel/mod.rs`):
-    - assemble prompt → agent.step() → parse response → execute blocks → wait
-    - Триггеры: user input (socket) + at_prompt (process done)
-    - Blocks выполняются параллельно
-    - Execute: text → send-text, keys → send-key, tai:cmd → dispatch
-- [ ] Model Channel: prose + executed blocks → plain text в socket
-- [ ] **Checkpoint**: `tai server` → пишу "запусти билд" → (mock) модель возвращает `\`\`\`build:text\ncargo build\n\`\`\`` → окно создаётся → команда выполняется → окно freezes → следующий тик показывает результат
+Единый принцип: **Server никогда не мутирует session напрямую**. Все изменения окон — через watcher.
+
+Флоу:
+1. Agent → `launch --title foo -- make test` → `execute_block` → backend возвращает `WindowCreated(id)`
+2. `execute_block` → `watcher.track(id, title)` — только регистрирует, session не трогает
+3. Watcher (background task) владеет `Arc<Mutex<Session>>` + backend:
+   - Поллит kitty (`List` + `Get`) периодически
+   - При первом poll нового id: создаёт `Window::new_active`, добавляет в session, focused
+   - При exit (detected through `last_cmd_exit_status` в get-text): читает финальный контент → `Active → Frozen` в session → шлёт `WindowExited` сигнал
+4. Watcher сигнализирует через `tokio::sync::mpsc`:
+   - `WatchEvent::WindowExited(window_id, exit_code)` — основной триггер
+   - `WatchEvent::WindowOutput(window_id)` — опционально для MVP
+5. Server event loop:
+   ```rust
+   loop {
+       select! {
+           event = watcher_rx.recv() => { tick(event).await }
+           line = client.read_line() => { handle_user_input(line) }
+       }
+   }
+   ```
+   TickTrigger: `WindowExited(window_id, exit_code)`, `UserMessage(text)`
+
+- [ ] **Watcher::track(id, title)** — регистрация нового окна для отслеживания
+- [ ] **Watcher background task** — владеет session + backend, поллит, мутит session
+    - Добавляет Window в session при первом poll
+    - Freeze при exit: `last_cmd_exit_status` из get-text → `Active → Frozen { content, exit_code }`
+    - Шлёт `WatchEvent` через channel
+- [ ] **Server event loop** — `select!` на watcher events + client input
+    - `execute_block` при launch → только `watcher.track()`, не трогает session
+- [ ] **Обёртка команд в bash -c**: kitty корректно показывает `last_cmd_exit_status` только если процесс — bash
+- [ ] **Тест: launch → session tracks** (уже написан, красный)
+- [ ] **Тест: полный lifecycle**: launch → watcher detects exit → freeze → tick показывает frozen окно
 - [ ] Doc-комментарии
 
 ### Phase 5: Snapshot Tests
 
 Цель: сервер тестируется с реальным Kitty, мокается только Agent. Снепшоты = что видит модель на каждом шаге.
 
-Опирается на MVP tick cycle из Phase 4. MockAgent подменяет Agent trait.
-Каждый вызов: снепшот промпта → вернуть захардкоженный ответ → repeat.
-
-- [ ] `MockAgent` — пошаговый сценарий
-    - `MockAgent::new().step("ответ1").step("ответ2")`
-    - Каждый вызов `step()`: 1) insta снепшот полученного промпта 2) возвращает захардкоженный ответ
-    - `mock.assert_all_steps_consumed()`
+- [ ] Обновить TestAgent для работы с insta снепшотами
 - [ ] Test harness: `tests/harness.rs`
-    - Сервер напрямую (не subprocess) с реальным KittyBackend + MockAgent
-    - `harness.input("launch bash")` → сервер обрабатывает
-    - `harness.wait_tick()` — подождать полный tick cycle
-    - `harness.freeze(id, exit_code)` — дождаться at_prompt → freeze → проверить
-    - Окна независимы → тесты параллельно
-- [ ] Snapshot tests (insta + toml):
-    - Пустой промпт (только system)
-    - Active окно → dashboard + content
-    - Frozen окно → exit code + content
-    - Несколько окон, focus/unfocus
-    - Предыдущий ответ модели перед наблюдениями
-    - Full tick cycle сценарии: multi-step
-- [ ] Парсинг ответа — снепшоты ParsedSegment
+- [ ] Snapshot tests (insta + toml)
 - [ ] **Checkpoint**: `cargo test` зелёные, `cargo insta review` — читаемые TOML снепшоты
 
 ### Phase 6: Window Lifecycle (full)
 
 Цель: полноценное управление окнами — focus, unfocus, archive.
 
-Расширяет lifecycle v1 из Phase 4.
-
 - [ ] Focus/unfocus: управление какие окна в "контексте"
-    - `focus <window>` — окно развёрнуто, content попадёт в промпт
-    - `unfocus <window>` — окно свёрнуто (summary)
 - [ ] Archive: frozen → archived (не в контексте, не в RAM)
-    - `archive <id>` — frozen → archived
-- [ ] `windows` команда — список с состояниями, exit code для frozen
-- [ ] **Checkpoint**: `launch bash` → `launch python` → `focus 1` → `unfocus 2` → промпт показывает content окна 1, summary окна 2 → `archive 2` → окна 2 нет в промпте
+- [ ] `windows` команда — список с состояниями
 - [ ] Тесты
-- [ ] Doc-комментарии
 
 ### Phase 7: Prompt Assembly (full)
 
 Цель: слои, бюджет, layout trait, references.
 
-Расширяет плоский prompt v1 из Phase 4.
-
-- [ ] `prompt/layout.rs` — PromptLayout trait + дефолтная реализация
-    - Immutable layer: system prompt + mind.md
-    - Ephemeral layer: dashboard + focused windows + previous response
-    - System layer: status bar (tokens, windows, write target)
-- [ ] `prompt/budget.rs` — подсчёт токенов (tiktoken-rs), бюджет слоёв
-- [ ] `prompt/assembler.rs` — сборка промпта через PromptLayout
-- [ ] `prompt/references.rs` — сбор --help/man page для окон с правом записи
-- [ ] Команда `prompt` в Model Channel → показывает собранный промпт (debug)
-- [ ] Обновить снепшот тесты — новая структура слоёв
-- [ ] **Checkpoint**: открываю несколько окон → `prompt` → вижу слоёный промпт с budget
-- [ ] Doc-комментарии
+- [ ] `prompt/layout.rs` — PromptLayout trait
+- [ ] `prompt/budget.rs` — подсчёт токенов
+- [ ] `prompt/references.rs` — сбор --help/man page
+- [ ] Обновить снепшот тесты
 
 ### Phase 8: Real LLM Client
 
-Цель: подключаем реальную модель вместо stub/mock.
+Цель: подключаем реальную модель.
 
 - [ ] `models/l_model.rs` — LLM клиент через llm crate (Claude/GPT API)
-    - Реализация Agent trait
-    - Thinking → mind.md (extended thinking extraction)
-- [ ] Обработка ошибок: изоляция между блоками, timeout (30с)
-- [ ] Idle timeout trigger (default 60s) — статусный тик
-- [ ] User Viewport: debug view — что модель решила, что выполнилось
-- [ ] **Checkpoint**: пишу в Kitty "найди все TODO" → Claude/GPT думает → открывает grep → результат → докладывает
-- [ ] Doc-комментарии
+- [ ] Thinking → mind.md
+- [ ] Обработка ошибок, timeout
 
 ### Phase 9: TUI Polish
 
-Цель: полноценный интерактивный dashboard в User Viewport.
+Цель: полноценный интерактивный dashboard.
 
-- [ ] Model Channel polish:
-    - Подсветка code blocks ANSI цветами
-    - Красивый state header
-    - Команда `clear` для очистки лога (scrollback сохраняется)
-- [ ] User Viewport — Debug UI:
-    - Windows tab: список с фильтрами, preview frozen content
-    - Debug tab: пошаговое исполнение (Step / Run All / Edit / Skip)
-    - Status bar: токены, активные окна, write target, tick count
-- [ ] `tui/status_bar.rs` — общие компоненты
-- [ ] Обработка горячих клавиш в User Viewport
-- [ ] **Checkpoint**: полноценная интерактивная сессия — Model Channel как REPL, User Viewport как dashboard
+- [ ] Model Channel polish (ANSI, state header)
+- [ ] User Viewport — Debug UI (windows tab, debug tab, status bar)
 
 ### Phase 10: Session Persistence
 
-Цель: перезапускаю `tai server` → frozen данные на месте, история сохранена.
+Цель: перезапуск без потери данных.
 
-- [ ] `session/manifest.rs` — session.json read/write (window registry, metadata)
-- [ ] `session/snapshot.rs` — frozen content save/load на диск
-- [ ] Graceful shutdown: freeze all active → save manifest → kill Kitty
-- [ ] Recovery при старте: load manifest → reconnect/recreate windows
-- [ ] **Checkpoint**: working session с frozen окнами → Ctrl+C → `tai server` → frozen данные доступны
-- [ ] Тесты persistence (save/load round-trip)
-- [ ] Doc-комментарии
+- [ ] session.json read/write
+- [ ] frozen content save/load
+- [ ] Graceful shutdown + recovery
 
 ## Открытые вопросы
 
 ### `keys` command bug
 
-`keys` отправляет символы как текст вместо keypress events. Возможно проблема в kitty-rc протоколе или формате `send-keys`. Исследовать позже.
+`keys` отправляет символы как текст вместо keypress events. Исследовать позже.
 
-### Stderr routing (три канала)
+### Stderr routing
 
-Три разных stderr-потока в системе, каждый требует своего решения:
-
-1. **TAI kernel stderr** — сейчас `eprintln!`. Сломает TUI когда ratatui захватит терминал.
-   → Решение: `tracing` с записью в log file (`~/.local/share/tai/kernel.log`).
-   Debug tab может показывать tail этого файла.
-
-2. **Kitty child process stderr** — сейчас `Stdio::null()` в `kitty.rs:55`. Теряем диагностику Kitty
-   (ошибки RC protocol, предупреждения).
-   → Решение: pipe stderr Kitty → async buffer → доступно модели как feedback.
-   Возможно стоит выводить в отдельное TUI окно или feed в debug tab.
-
-3. **Window process stderr** — через PTY, смешан с stdout. Модель видит через get-text. ✅ Не требует изменений.
-
-**Открытый вопрос:** как именно stderr Kitty процесса интегрируется в tick cycle — отдельное окно?
-Строка в dashboard? Event в kernel loop? Решить при реализации Phase 5/6.
+Три stderr-потока: kernel, kitty child, window process. См. `ARCHITECTURE.md`.
 
 ## S-Models
 
 Лёгкие модели-наблюдатели для свёрнутых окон. Система полностью работает без них.
 
-## IPC / Remote API 
+## IPC / Remote API
 
 Unix socket или HTTP API для внешних клиентов. Когда появится TmuxBackend или remote.
