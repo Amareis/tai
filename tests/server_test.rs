@@ -1,81 +1,78 @@
 #![cfg(test)]
 
 use assert_matches::assert_matches;
-use tai::backend::kitty::KittyBackend;
-use tai::core::utils::bind;
+use std::time::Duration;
+use tai::agent::{AgentResponse, TestAgent};
+use tai::backend::Terminal;
 use tai::core::Server;
-use tai::agent::{TestAgent, AgentResponse};
-use tai::prompt::{Prompt, WindowStateKind};
-use tai::types::{BlockMode, Session};
+use tai::create_server;
+use tai::prompt::{Prompt};
+use tai::types::{BlockMode};
+use tracing_test::traced_test;
 
-fn empty_session() -> Session {
-    Session::new("test".to_string(), std::env::temp_dir().join("tai-test-mind.md"))
-}
-
-async fn spawn_server(agent: TestAgent, session: Session) -> (Server, tokio::task::JoinHandle<()>) {
-    let kitty_socket =
-        std::env::temp_dir().join(format!("test-kitty-{}.sock", uuid::Uuid::new_v4()));
-    let client_socket =
-        std::env::temp_dir().join(format!("test-server-{}.sock", uuid::Uuid::new_v4()));
-
-    let backend = KittyBackend::spawn(&[], &kitty_socket, true)
-        .await
-        .expect("kitty should be in PATH");
-
-    let (listener, _guard) = bind(&client_socket).await.unwrap();
-
-    let sp = client_socket.clone();
-    let conn_guard = tokio::spawn(async move {
-        let _stream = tokio::net::UnixStream::connect(&sp).await.unwrap();
-        std::future::pending::<()>().await;
-    });
-
-    let server = Server::accept(
-        &listener,
-        Box::new(backend),
-        session,
-        Box::new(agent),
-    )
-    .await
-    .unwrap();
-
-    (server, conn_guard)
+fn assert_test_agent(server: &Server) {
+    server.agent.as_any().expect("Должен быть as_any в TestAgent")
+        .downcast_ref::<TestAgent>()
+        .expect("Должен быть TestAgent").assert_all_consumed();
 }
 
 #[tokio::test]
+#[traced_test]
 async fn tick_empty_session() {
-    let agent = TestAgent::new().step(
+    let agent = TestAgent::new().add_step(
         |prompt: &Prompt| {
-            assert!(prompt.dashboard.is_empty());
-            assert!(prompt.focused_windows.is_empty());
+            assert_eq!(prompt.dashboard.len(), 1);
+            assert_eq!(prompt.focused_windows.len(), 1);
         },
         AgentResponse::empty(),
     );
 
-    let (mut server, _guard) = spawn_server(agent, empty_session()).await;
+    let mut server = create_server(None, Box::new(agent), true).await.unwrap();
     server.tick().await.unwrap();
+
+    assert_test_agent(&server);
 }
 
 #[tokio::test]
+#[traced_test]
 async fn tick_agent_launches_window_and_session_tracks_it() {
     let agent = TestAgent::new()
-        .step(
+        .add_step(
             |prompt: &Prompt| {
-                assert!(prompt.dashboard.is_empty());
+                assert_eq!(prompt.dashboard.len(), 1);
             },
-            AgentResponse::block("tai", BlockMode::Cmd, "launch --title hello -- echo marker-xyz"),
+            AgentResponse::block(
+                "tai",
+                BlockMode::Cmd,
+                "launch --title hello -- echo marker-xyz",
+            ),
         )
-        .step(
+        .add_step(
             |prompt: &Prompt| {
-                let w = prompt.dashboard.first().expect("session should track launched window");
-                assert_eq!(w.title, "hello");
-                assert_matches!(w.state_kind, WindowStateKind::Frozen {exit_code: 0}, "Window should be closed");
-
+                let w = prompt
+                    .dashboard
+                    .first()
+                    .expect("session should track launched window");
+                assert_eq!(w.title, "nc");
+                assert_matches!(
+                    w,
+                    Terminal {
+                        last_cmd_exit_status: Some(0),
+                        ..
+                    },
+                    "Window should be closed"
+                );
             },
             AgentResponse::empty(),
         );
 
-    let (mut server, _guard) = spawn_server(agent, empty_session()).await;
+    let mut server = create_server(None, Box::new(agent), true).await.unwrap();
     server.tick().await.unwrap();
+    server
+        .wait_trigger(Some(Duration::from_secs(1)))
+        .await
+        .unwrap();
     server.tick().await.unwrap();
+
+    assert_test_agent(&server);
 }

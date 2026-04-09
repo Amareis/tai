@@ -1,20 +1,13 @@
 use std::collections::HashMap;
 
-use chrono::Utc;
 use tracing::info;
 
-use crate::backend::{BackendCmd, BackendError, CloseCmd, CmdResponse, GetTextCmd, TerminalBackend, WindowId};
-use crate::types::{Session, Window, WindowState};
-
-#[derive(Debug, Clone)]
-pub enum WatchEvent {
-    WindowAdded { window_id: String },
-    WindowExited { window_id: String, exit_code: i32 },
-}
+use crate::backend::{BackendCmd, BackendError, CmdResponse, Terminal, TerminalBackend, WindowId};
 
 struct TrackedWindow {
-    title: String,
-    added_to_session: bool,
+    #[allow(dead_code)]
+    id: WindowId,
+    was_active: bool,
 }
 
 pub struct Watcher {
@@ -35,19 +28,21 @@ impl Watcher {
         }
     }
 
-    pub fn track(&mut self, backend_id: WindowId, title: String) {
-        info!("watcher: tracking {backend_id} ({title})");
-        self.tracked.insert(backend_id, TrackedWindow {
-            title,
-            added_to_session: false,
-        });
+    pub fn track(&mut self, id: WindowId, is_active: bool) {
+        info!("watcher: tracking {id}");
+        self.tracked.insert(
+            id.clone(),
+            TrackedWindow {
+                id,
+                was_active: is_active,
+            },
+        );
     }
 
-    pub async fn poll(
+    pub async fn poll_exited(
         &mut self,
         back: &dyn TerminalBackend,
-        session: &mut Session,
-    ) -> Result<Vec<WatchEvent>, BackendError> {
+    ) -> Result<Vec<Terminal>, BackendError> {
         if self.tracked.is_empty() {
             return Ok(Vec::new());
         }
@@ -62,83 +57,41 @@ impl Watcher {
             }
         };
 
-        let window_map: HashMap<&WindowId, &crate::backend::WindowInfo> = all_windows
-            .iter()
-            .map(|w| (&w.id, w))
-            .collect();
+        let window_map: HashMap<&WindowId, &Terminal> =
+            all_windows.iter().map(|w| (&w.id, w)).collect();
 
-        let mut to_add = Vec::new();
-        let mut to_freeze = Vec::new();
+        let mut exited = Vec::<Terminal>::new();
 
-        for (backend_id, tracked) in &self.tracked {
-            if let Some(info) = window_map.get(backend_id) {
-                if !tracked.added_to_session {
-                    to_add.push((backend_id.clone(), info.pid, tracked.title.clone()));
-                } else if info.is_at_prompt {
-                    to_freeze.push((backend_id.clone(), info.last_cmd_exit_status));
-                }
+        for (backend_id, tracked) in &mut self.tracked {
+            if let Some(info) = window_map.get(backend_id)
+                && info.is_at_prompt
+                && tracked.was_active
+            {
+                exited.push((*info).clone());
+                tracked.was_active = false;
             }
         }
 
-        let mut events = Vec::new();
+        //TODO close exited windows?
+        // let _ = back
+        //     .execute(BackendCmd::Close(CloseCmd {
+        //         window: backend_id.clone(),
+        //     }))
+        //     .await;
+        //
+        // self.tracked.remove(&backend_id);
 
-        for (backend_id, pid, title) in to_add {
-            let window = Window::new_active(backend_id.0.clone(), pid, title);
-            let window_id = window.id.clone();
-            session.windows.push(window);
-
-            if let Some(t) = self.tracked.get_mut(&backend_id) {
-                t.added_to_session = true;
-            }
-
-            info!("watcher: added window {window_id} (backend {backend_id})");
-            events.push(WatchEvent::WindowAdded { window_id });
-        }
-
-        for (backend_id, exit_code) in to_freeze {
-            let content = back
-                .execute(BackendCmd::Get(GetTextCmd {
-                    window: backend_id.clone(),
-                }))
-                .await
-                .map(|r| match r {
-                    CmdResponse::Text(t) => t,
-                    _ => String::new(),
-                })
-                .unwrap_or_default();
-
-            let exit_code = exit_code.unwrap_or(-1);
-
-            if let Some(w) = session.windows.iter_mut().find(|w| {
-                matches!(&w.state, WindowState::Active { backend_id: bid, .. } if bid == &backend_id.0)
-            }) {
-                w.state = WindowState::Frozen {
-                    content,
-                    exit_code,
-                    captured_at: Utc::now(),
-                };
-                let wid = w.id.clone();
-                info!("watcher: froze window {wid} (exit_code={exit_code})");
-                events.push(WatchEvent::WindowExited { window_id: wid, exit_code });
-            }
-
-            let _ = back
-                .execute(BackendCmd::Close(CloseCmd {
-                    window: backend_id.clone(),
-                }))
-                .await;
-
-            self.tracked.remove(&backend_id);
-        }
-
-        Ok(events)
+        Ok(exited)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{BackendCmd, BackendError, CmdResponse, TerminalBackend, WindowId, WindowInfo};
+    use crate::backend::{
+        BackendCmd, BackendError, CmdResponse, Terminal, TerminalBackend, WindowId,
+    };
+    use assert_matches::assert_matches;
     use async_trait::async_trait;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -165,31 +118,31 @@ mod tests {
             }
         }
 
-        fn add_window(&self, id: &str, at_prompt: bool, text: &str) {
+        fn add_window(&self, id: WindowId, at_prompt: bool, text: &str) {
             let mut windows = self.windows.lock().unwrap();
             windows.push(MockWindow {
-                id: WindowId(id.to_string()),
                 title: id.to_string(),
+                id,
                 at_prompt,
                 last_cmd_exit_status: None,
                 text: text.to_string(),
             });
         }
 
-        fn add_window_with_exit(&self, id: &str, at_prompt: bool, text: &str, exit_code: i32) {
+        fn add_window_with_exit(&self, id: WindowId, at_prompt: bool, text: &str, exit_code: i32) {
             let mut windows = self.windows.lock().unwrap();
             windows.push(MockWindow {
-                id: WindowId(id.to_string()),
                 title: id.to_string(),
+                id,
                 at_prompt,
                 last_cmd_exit_status: Some(exit_code),
                 text: text.to_string(),
             });
         }
 
-        fn set_at_prompt(&self, id: &str, at_prompt: bool) {
+        fn set_at_prompt(&self, id: &WindowId, at_prompt: bool) {
             let mut windows = self.windows.lock().unwrap();
-            if let Some(w) = windows.iter_mut().find(|w| w.id.0 == id) {
+            if let Some(w) = windows.iter_mut().find(|w| w.id == *id) {
                 w.at_prompt = at_prompt;
             }
         }
@@ -210,13 +163,13 @@ mod tests {
                     let windows = self.windows.lock().unwrap();
                     let w = windows
                         .iter()
-                        .find(|w| w.id == cmd.window)
-                        .ok_or_else(|| BackendError::WindowNotFound(cmd.window.to_string()))?;
+                        .find(|w| w.id == cmd.window_id)
+                        .ok_or_else(|| BackendError::WindowNotFound(cmd.window_id.to_string()))?;
                     Ok(CmdResponse::Text(w.text.clone()))
                 }
                 BackendCmd::Close(cmd) => {
                     let mut windows = self.windows.lock().unwrap();
-                    windows.retain(|w| w.id != cmd.window);
+                    windows.retain(|w| w.id != cmd.window_id);
                     Ok(CmdResponse::Ok)
                 }
                 BackendCmd::List => {
@@ -224,7 +177,7 @@ mod tests {
                     Ok(CmdResponse::Windows(
                         windows
                             .iter()
-                            .map(|w| WindowInfo {
+                            .map(|w| Terminal {
                                 id: w.id.clone(),
                                 title: w.title.clone(),
                                 pid: 1,
@@ -238,77 +191,71 @@ mod tests {
         }
     }
 
-    fn empty_session() -> Session {
-        Session::new("test".to_string(), std::env::temp_dir().join("tai-test-mind.md"))
-    }
-
     #[tokio::test]
     async fn test_poll_empty_tracked() {
         let backend = MockBackend::new();
         let mut watcher = Watcher::new();
-        let mut session = empty_session();
 
-        let events = watcher.poll(&backend, &mut session).await.unwrap();
+        let events = watcher.poll_exited(&backend).await.unwrap();
         assert!(events.is_empty());
     }
 
     #[tokio::test]
     async fn test_poll_adds_window_to_session() {
         let backend = MockBackend::new();
-        backend.add_window("w1", false, "running...");
+        let wid = WindowId::new("w1");
+        backend.add_window(wid.clone(), false, "running...");
 
         let mut watcher = Watcher::new();
-        let mut session = empty_session();
-        watcher.track(WindowId("w1".to_string()), "hello".to_string());
+        watcher.track(wid.clone(), true);
 
-        let events = watcher.poll(&backend, &mut session).await.unwrap();
-        assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], WatchEvent::WindowAdded { window_id } if !window_id.is_empty()));
-
-        assert_eq!(session.windows.len(), 1);
-        assert!(session.windows[0].state.is_active());
+        let exited = watcher.poll_exited(&backend).await.unwrap();
+        assert_eq!(exited.len(), 0);
     }
 
     #[tokio::test]
     async fn test_poll_freezes_on_exit() {
         let backend = MockBackend::new();
-        backend.add_window_with_exit("w1", true, "hello world", 0);
+        let wid = WindowId::new("w1");
+        backend.add_window_with_exit(wid.clone(), false, "hello world", 0);
 
         let mut watcher = Watcher::new();
-        let mut session = empty_session();
-        watcher.track(WindowId("w1".to_string()), "hello".to_string());
+        watcher.track(wid.clone(), true);
 
         // first poll: add to session
-        let events = watcher.poll(&backend, &mut session).await.unwrap();
-        assert_eq!(events.len(), 1);
-        assert!(session.windows[0].state.is_active());
+        let exited = watcher.poll_exited(&backend).await.unwrap();
+        assert_eq!(exited.len(), 0);
 
-        backend.set_at_prompt("w1", true);
+        backend.set_at_prompt(&wid, true);
 
         // second poll: freeze
-        let events = watcher.poll(&backend, &mut session).await.unwrap();
-        assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], WatchEvent::WindowExited { exit_code: 0, .. }));
-        assert!(session.windows[0].state.is_frozen());
+        let exited = watcher.poll_exited(&backend).await.unwrap();
+        assert_eq!(exited.len(), 1);
+        assert_eq!(exited[0].id, wid);
+        assert_matches!(
+            &exited[0],
+            Terminal {
+                last_cmd_exit_status: Some(0),
+                ..
+            }
+        );
     }
 
     #[tokio::test]
     async fn test_poll_no_at_prompt_stays_active() {
         let backend = MockBackend::new();
-        backend.add_window("w1", false, "running...");
+        let wid = WindowId::new("w1");
+        backend.add_window(wid, false, "running...");
 
         let mut watcher = Watcher::new();
-        let mut session = empty_session();
-        watcher.track(WindowId("w1".to_string()), "hello".to_string());
+        watcher.track(WindowId("w1".to_string()), true);
 
         // first poll: add
-        let events = watcher.poll(&backend, &mut session).await.unwrap();
-        assert_eq!(events.len(), 1);
-        assert!(session.windows[0].state.is_active());
+        let exited = watcher.poll_exited(&backend).await.unwrap();
+        assert!(exited.is_empty());
 
         // second poll: still running (not at prompt)
-        let events = watcher.poll(&backend, &mut session).await.unwrap();
-        assert!(events.is_empty());
-        assert!(session.windows[0].state.is_active());
+        let exited = watcher.poll_exited(&backend).await.unwrap();
+        assert!(exited.is_empty());
     }
 }

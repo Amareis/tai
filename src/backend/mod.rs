@@ -4,12 +4,22 @@ pub mod watch;
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use std::fmt;
+use serde::{Deserialize, Serialize};
 
 /// Уникальный идентификатор окна в backend.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WindowId(pub String);
 
 impl WindowId {
+    pub fn new<T: Into<String>>(id: T) -> Self {
+        Self(id.into())
+    }
+
+    #[must_use]
+    pub fn uuid() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -31,8 +41,8 @@ impl std::str::FromStr for WindowId {
 }
 
 /// Информация об окне, возвращаемая backend при `list_windows`.
-#[derive(Debug, Clone)]
-pub struct WindowInfo {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Terminal {
     pub id: WindowId,
     pub title: String,
     pub pid: u32,
@@ -76,21 +86,21 @@ pub struct SendKeysCmd {
 #[derive(Debug, Clone, PartialEq, Parser)]
 pub struct GetTextCmd {
     /// ID окна
-    pub window: WindowId,
+    pub window_id: WindowId,
 }
 
 /// Команда закрытия окна.
 #[derive(Debug, Clone, PartialEq, Parser)]
 pub struct CloseCmd {
     /// ID окна
-    pub window: WindowId,
+    pub window_id: WindowId,
 }
 
 /// Команда установки заголовка окна.
 #[derive(Debug, Clone, PartialEq, Parser)]
 pub struct SetTitleCmd {
     /// ID окна
-    pub window: WindowId,
+    pub window_id: WindowId,
     /// Новый заголовок
     #[arg(trailing_var_arg = true)]
     pub title: Vec<String>,
@@ -128,7 +138,7 @@ pub enum CmdResponse {
     /// Текст содержимого окна
     Text(String),
     /// Список окон
-    Windows(Vec<WindowInfo>),
+    Windows(Vec<Terminal>),
     /// Команда выполнена успешно
     Ok,
     /// Ошибка выполнения

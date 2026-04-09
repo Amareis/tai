@@ -1,25 +1,23 @@
 use std::fmt::Write;
 use std::time::Duration;
 
+use crate::agent::Agent;
+use crate::backend::watch::Watcher;
+use crate::backend::{BackendCmd, CmdResponse, TerminalBackend, WindowId};
+use crate::routing::parser;
+use crate::types::{BlockMode, ParsedSegment, TickTrigger};
+use connection::Connection;
 use rustyline_async::ReadlineError;
 use thiserror::Error;
-use tokio::net::UnixListener;
 use tokio::select;
-use tokio::time::sleep;
 use tracing::info;
 
-use crate::backend::watch::{WatchEvent, Watcher};
-use crate::backend::{BackendCmd, CmdResponse, LaunchCmd, TerminalBackend, WindowId};
-use crate::models::Agent;
-use crate::routing::parser;
-use crate::types::{BlockMode, ParsedSegment, Session};
-use connection::Connection;
-
 mod client;
-mod connection;
+pub mod connection;
 pub mod utils;
 
 pub use client::Client;
+use utils::sleep_some_or_forever;
 
 const TRIGGER_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -35,7 +33,7 @@ pub enum CoreError {
     Readline(#[from] ReadlineError),
 
     #[error("agent error: {0}")]
-    Agent(#[from] crate::models::AgentError),
+    Agent(#[from] crate::agent::AgentError),
 
     #[error("backend error: {0}")]
     Backend(#[from] crate::backend::BackendError),
@@ -44,34 +42,26 @@ pub enum CoreError {
     Prompt(#[from] crate::prompt::PromptError),
 }
 
-enum Trigger {
-    WatcherEvents(Vec<WatchEvent>),
-    UserInput(String),
-    Timeout,
-}
-
 pub struct Server {
     client: Connection,
     back: Box<dyn TerminalBackend>,
-    session: Session,
-    agent: Box<dyn Agent>,
+    pub agent: Box<dyn Agent>,
     watcher: Watcher,
 }
 
 impl Server {
-    pub async fn accept(
-        unix_listener: &UnixListener,
+    #[must_use]
+    pub fn new(
+        client: Connection,
         back: Box<dyn TerminalBackend>,
-        session: Session,
         agent: Box<dyn Agent>,
-    ) -> Result<Self, CoreError> {
-        Connection::accept(unix_listener).await.map(|client| Self {
+    ) -> Self {
+        Self {
             client,
             back,
-            session,
             agent,
             watcher: Watcher::new(),
-        })
+        }
     }
 
     pub async fn run(&mut self) -> Result<(), CoreError> {
@@ -95,59 +85,68 @@ impl Server {
         self.tick().await?;
 
         loop {
-            match self.wait_trigger().await? {
-                Trigger::WatcherEvents(events) => {
-                    for event in &events {
-                        info!("watcher event: {event:?}");
-                    }
-                    self.tick().await?;
-                }
-                Trigger::UserInput(line) => {
-                    self.handle_input(&line).await?;
-                }
-                Trigger::Timeout => {
-                    // nothing happened, loop back to wait
-                }
-            }
+            let _events = self.wait_trigger(Some(TRIGGER_TIMEOUT)).await?;
+            self.tick().await?;
         }
     }
 
     pub async fn tick(&mut self) -> Result<(), CoreError> {
-        let events = self.watcher.poll(self.back.as_ref(), &mut self.session).await?;
+        let events = self
+            .watcher
+            .poll_exited(self.back.as_ref())
+            .await?;
 
         for event in &events {
             info!("watcher event: {event:?}");
         }
 
-        let prompt = crate::prompt::build(&self.session, self.back.as_ref(), None).await?;
+        let prompt = crate::prompt::build(self.back.as_ref(), None).await?;
 
         let response = self.agent.step(&prompt).await?;
 
         let results = self.execute_blocks(&response.segments).await;
 
         let output = format_results(&response.segments, &results);
-        self.client.write_line(&output).await?;
+
+        if !output.is_empty() {
+            self.client.write_line(&output).await?;
+        }
         Ok(())
     }
 
-    async fn wait_trigger(&mut self) -> Result<Trigger, CoreError> {
-        let events = self.watcher.poll(self.back.as_ref(), &mut self.session).await?;
-        if !events.is_empty() {
-            return Ok(Trigger::WatcherEvents(events));
+    pub async fn wait_trigger(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> Result<TickTrigger, CoreError> {
+        let exited = self
+            .watcher
+            .poll_exited(self.back.as_ref())
+            .await?;
+        if !exited.is_empty() {
+            info!("watcher exited: {exited:?}");
+            return Ok(TickTrigger::WindowsExited(exited));
         }
 
         select! {
             result = self.client.read_line() => {
+                info!("client line: {result:?}");
                 match result {
-                    Ok(Some(line)) => Ok(Trigger::UserInput(line)),
+                    Ok(Some(line)) => {
+                        let seg = vec![ParsedSegment::Block{window: "tai".to_string(), mode: BlockMode::Cmd, content:line}];
+                        let res = self.execute_blocks(&seg).await;
+                        let _ = self.client.write_line(&format_results(&seg, &res)).await;
+                        Ok(TickTrigger::UserMessage)
+                    },
                     Ok(None) => Err(CoreError::ConnectionClosed),
                     Err(e) => Err(e),
                 }
             }
-            () = sleep(TRIGGER_TIMEOUT) => Ok(Trigger::Timeout),
+            () = sleep_some_or_forever(timeout) => {
+                Ok(TickTrigger::IdleTimeout)
+            },
         }
     }
-
+/*
     async fn handle_input(&mut self, line: &str) -> Result<(), CoreError> {
         info!("received from model channel: {line}");
 
@@ -155,10 +154,14 @@ impl Server {
             Ok(cmd) => match self.back.execute(cmd).await {
                 Ok(response) => match response {
                     CmdResponse::WindowCreated(id) => {
-                        self.client.write_line(&format!("Window created: {id}")).await?;
+                        self.client
+                            .write_line(&format!("Window created: {id}"))
+                            .await?;
                     }
                     CmdResponse::Text(text) => {
-                        self.client.write_line(&text).await?;
+                        if !text.is_empty() {
+                            self.client.write_line(&text).await?;
+                        }
                     }
                     CmdResponse::Windows(windows) => {
                         self.client
@@ -181,17 +184,19 @@ impl Server {
                     }
                 },
                 Err(e) => {
-                    self.client.write_line(&format!("Backend error: {e}")).await?;
+                    self.client
+                        .write_line(&format!("Backend error: {e}"))
+                        .await?;
                 }
             },
             Err(e) => {
-                self.client.write_line(&format!("{e}")).await?;
+                self.client.write_line(&e.to_string()).await?;
             }
         }
 
         Ok(())
     }
-
+*/
     async fn execute_blocks(&mut self, segments: &[ParsedSegment]) -> Vec<BlockResult> {
         let mut results = Vec::new();
 
@@ -218,6 +223,7 @@ impl Server {
     ) -> BlockResult {
         match mode {
             BlockMode::Text => {
+                let _ = self.client.write_line(&format!("send {window} {content}")).await;
                 let cmd = BackendCmd::Send(crate::backend::SendTextCmd {
                     window: WindowId(window.to_string()),
                     text: vec![content.to_string()],
@@ -225,6 +231,7 @@ impl Server {
                 self.execute_backend_cmd(cmd, window).await
             }
             BlockMode::Keys => {
+                let _ = self.client.write_line(&format!("keys {window} {content}")).await;
                 let keys: Vec<String> = content.split_whitespace().map(String::from).collect();
                 let cmd = BackendCmd::Keys(crate::backend::SendKeysCmd {
                     window: WindowId(window.to_string()),
@@ -232,36 +239,32 @@ impl Server {
                 });
                 self.execute_backend_cmd(cmd, window).await
             }
-            BlockMode::Cmd => match parser::parse(content) {
-                Ok(BackendCmd::Launch(launch_cmd)) => {
-                    self.execute_launch(launch_cmd).await
+            BlockMode::Cmd => {
+                let _ = self.client.write_line(content).await;
+                match parser::parse(content) {
+                    Ok(cmd) => self.execute_backend_cmd(cmd, "tai").await,
+                    Err(e) => BlockResult::Error("tai".to_string(), e.to_string()),
                 }
-                Ok(cmd) => self.execute_backend_cmd(cmd, "tai").await,
-                Err(e) => BlockResult::Error("tai".to_string(), e.to_string()),
-            },
-        }
-    }
-
-    async fn execute_launch(&mut self, cmd: LaunchCmd) -> BlockResult {
-        let title = cmd.title.as_deref().unwrap_or("tai").to_string();
-        match self.back.execute(BackendCmd::Launch(cmd)).await {
-            Ok(CmdResponse::WindowCreated(id)) => {
-                self.watcher.track(id.clone(), title);
-                BlockResult::Created(id)
             }
-            Ok(CmdResponse::Error(e)) => BlockResult::Error("tai".to_string(), e),
-            Ok(_) => BlockResult::Error("tai".to_string(), "unexpected response".to_string()),
-            Err(e) => BlockResult::Error("tai".to_string(), e.to_string()),
         }
     }
 
     async fn execute_backend_cmd(&mut self, cmd: BackendCmd, target: &str) -> BlockResult {
         match self.back.execute(cmd).await {
-            Ok(CmdResponse::WindowCreated(id)) => BlockResult::Created(id),
-            Ok(CmdResponse::Text(text)) => BlockResult::Text(target.to_string(), text),
-            Ok(CmdResponse::Windows(windows)) => {
-                BlockResult::List(target.to_string(), windows.len())
+            Ok(CmdResponse::WindowCreated(id)) => {
+                self.watcher.track(id.clone(), true);
+                BlockResult::Created(id)
             }
+            Ok(CmdResponse::Text(text)) => BlockResult::Text(target.to_string(), text),
+            Ok(CmdResponse::Windows(windows)) => BlockResult::List(
+                target.to_string(),
+                windows.iter().map(|w| {
+                    format!(
+                        "{} | {} | pid {} | prompt: {}",
+                        w.id, w.title, w.pid, w.is_at_prompt
+                    )
+                }).collect(),
+            ),
             Ok(CmdResponse::Ok) => BlockResult::Ok(target.to_string()),
             Ok(CmdResponse::Error(e)) => BlockResult::Error(target.to_string(), e),
             Err(e) => BlockResult::Error(target.to_string(), e.to_string()),
@@ -272,7 +275,7 @@ impl Server {
 enum BlockResult {
     Created(WindowId),
     Text(String, String),
-    List(String, usize),
+    List(String, Vec<String>),
     Ok(String),
     Error(String, String),
 }
@@ -295,13 +298,13 @@ fn format_results(segments: &[ParsedSegment], results: &[BlockResult]) -> String
         }
         match result {
             BlockResult::Created(id) => {
-                let _ = write!(output, "[created] {id}");
+                let _ = write!(output, "[created], id = {id}");
             }
             BlockResult::Text(target, text) => {
                 let _ = write!(output, "[{target}] {text}");
             }
-            BlockResult::List(target, count) => {
-                let _ = write!(output, "[{target}] {count} windows");
+            BlockResult::List(target, list) => {
+                let _ = write!(output, "[{target}]\n{}", list.join("\n"));
             }
             BlockResult::Ok(target) => {
                 let _ = write!(output, "[{target}] OK");
@@ -314,4 +317,3 @@ fn format_results(segments: &[ParsedSegment], results: &[BlockResult]) -> String
 
     output
 }
-

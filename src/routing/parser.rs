@@ -36,16 +36,7 @@ pub fn parse(input: &str) -> Result<BackendCmd, ParseError> {
         }),
     }?;
 
-    let cmd = cli.command;
-
-    if let BackendCmd::Launch(l) = &cmd && l.command.is_empty() {
-        return Err(ParseError::Clap(clap::Error::raw(
-            ErrorKind::MissingRequiredArgument,
-            "launch requires a command after --",
-        )));
-    }
-
-    Ok(cmd)
+    Ok(cli.command)
 }
 
 #[cfg(test)]
@@ -115,7 +106,7 @@ mod tests {
     fn test_get_text() {
         let cmd = parse("get 123").unwrap();
         match cmd {
-            BackendCmd::Get(GetTextCmd { window }) => {
+            BackendCmd::Get(GetTextCmd { window_id: window }) => {
                 assert_eq!(window, WindowId("123".to_string()));
             }
             _ => panic!("expected Get"),
@@ -126,7 +117,7 @@ mod tests {
     fn test_close() {
         let cmd = parse("close 42").unwrap();
         match cmd {
-            BackendCmd::Close(CloseCmd { window }) => {
+            BackendCmd::Close(CloseCmd { window_id: window }) => {
                 assert_eq!(window, WindowId("42".to_string()));
             }
             _ => panic!("expected Close"),
@@ -143,7 +134,7 @@ mod tests {
     fn test_set_title() {
         let cmd = parse("title 1 my new title").unwrap();
         match cmd {
-            BackendCmd::Title(SetTitleCmd { window, title }) => {
+            BackendCmd::Title(SetTitleCmd { window_id: window, title }) => {
                 assert_eq!(window, WindowId("1".to_string()));
                 assert_eq!(title, vec!["my", "new", "title"]);
             }
@@ -160,7 +151,7 @@ mod tests {
     #[test]
     fn test_launch_missing_command() {
         let result = parse("launch --title foo");
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]

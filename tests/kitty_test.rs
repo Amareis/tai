@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 use tai::backend::kitty::KittyBackend;
-use tai::backend::{BackendCmd, CmdResponse, LaunchCmd, TerminalBackend};
+use tai::backend::{BackendCmd, CmdResponse, LaunchCmd, Terminal, TerminalBackend};
 
 #[allow(clippy::expect_used)]
 async fn spawn_backend_with_path() -> (KittyBackend, PathBuf) {
@@ -71,8 +71,6 @@ async fn get_text_returns_content() {
         .execute(BackendCmd::Launch(LaunchCmd {
             title: Some("test-text".to_string()),
             command: vec![
-                "bash".to_string(),
-                "-c".to_string(),
                 "echo marker-42".to_string(),
             ],
         }))
@@ -83,7 +81,7 @@ async fn get_text_returns_content() {
 
     let CmdResponse::Text(text) = backend
         .execute(BackendCmd::Get(tai::backend::GetTextCmd {
-            window: window_id.clone(),
+            window_id: window_id.clone(),
         }))
         .await
         .expect("get_text should work") else { panic!("expected Text response") };
@@ -118,7 +116,7 @@ async fn send_text_to_window() {
 
     let CmdResponse::Text(text) = backend
         .execute(BackendCmd::Get(tai::backend::GetTextCmd {
-            window: window_id.clone(),
+            window_id: window_id.clone(),
         }))
         .await
         .expect("get_text should work") else { panic!("expected Text") };
@@ -149,7 +147,7 @@ async fn close_window() {
 
     backend
         .execute(BackendCmd::Close(tai::backend::CloseCmd {
-            window: window_id.clone(),
+            window_id: window_id.clone(),
         }))
         .await
         .expect("close should succeed");
@@ -178,7 +176,7 @@ async fn set_title() {
 
     backend
         .execute(BackendCmd::Title(tai::backend::SetTitleCmd {
-            window: window_id.clone(),
+            window_id: window_id.clone(),
             title: vec!["new-title".to_string()],
         }))
         .await
@@ -198,7 +196,6 @@ async fn set_title() {
 #[tokio::test]
 async fn watcher_detects_exit() {
     use tai::backend::watch::Watcher;
-    use tai::types::Session;
 
     let backend = spawn_backend().await;
 
@@ -215,17 +212,14 @@ async fn watcher_detects_exit() {
         .expect("launch should succeed") else { panic!("expected WindowCreated") };
 
     let mut watcher = Watcher::new();
-    let mut session = Session::new("test".to_string(), std::env::temp_dir().join("tai-test-mind.md"));
-    watcher.track(window_id.clone(), "test-watch".to_string());
+    watcher.track(window_id.clone(), true);
 
     let mut detected = false;
     for _ in 0..30 {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let events = watcher.poll(&backend, &mut session).await.expect("poll should work");
-        for event in &events {
-            if let tai::backend::watch::WatchEvent::WindowExited { .. } = event {
-                detected = true;
-            }
+        let exited = watcher.poll_exited(&backend).await.expect("poll should work");
+        if let Some(Terminal {id, ..}) = exited.first() && *id == window_id {
+            detected = true;
         }
         if detected {
             break;
@@ -233,5 +227,4 @@ async fn watcher_detects_exit() {
     }
 
     assert!(detected, "should detect window exit");
-    assert!(session.windows.iter().any(|w| w.state.is_frozen()), "window should be frozen in session");
 }

@@ -1,7 +1,8 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use async_trait::async_trait;
 use crate::agent::{Agent, AgentError, AgentResponse, TestStep};
 use crate::prompt::Prompt;
+use async_trait::async_trait;
+use std::any::Any;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct TestAgent {
     steps: Vec<TestStep>,
@@ -24,7 +25,7 @@ impl TestAgent {
     }
 
     #[must_use]
-    pub fn step(
+    pub fn add_step(
         mut self,
         check: impl Fn(&Prompt) + Send + Sync + 'static,
         response: AgentResponse,
@@ -63,10 +64,8 @@ impl Agent for TestAgent {
 
         Ok(step.response.clone())
     }
-}
 
-impl Drop for TestAgent {
-    fn drop(&mut self) {
-        self.assert_all_consumed();
+    fn as_any(&self) -> Option<&dyn Any> {
+        Some(self)
     }
 }

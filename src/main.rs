@@ -14,9 +14,6 @@ enum Cli {
         /// Start kitty hidden
         #[arg(long)]
         hidden: bool,
-
-        #[arg(long)]
-        debug: bool,
     },
 
     /// Run inside Kitty — pass stdin/stdout FD to server
@@ -24,9 +21,6 @@ enum Cli {
         /// Unix socket path to connect to
         #[arg(long)]
         socket: String,
-
-        #[arg(long)]
-        debug: bool,
     },
 }
 
@@ -38,15 +32,14 @@ async fn main() {
         Cli::Server {
             socket,
             hidden,
-            debug,
         } => {
-            if let Err(e) = tai::run_server(socket.map(PathBuf::from), hidden, debug).await {
+            if let Err(e) = tai::run_server(socket.map(PathBuf::from), hidden).await {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
         }
-        Cli::Client { socket, debug } => {
-            if let Err(e) = tai::run_client(PathBuf::from(socket), debug).await {
+        Cli::Client { socket } => {
+            if let Err(e) = tai::run_client(PathBuf::from(socket)).await {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }

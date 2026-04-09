@@ -1,6 +1,8 @@
-use crate::backend::{BackendCmd, CmdResponse, GetTextCmd, TerminalBackend, WindowId};
 use crate::agent::AgentResponse;
-use crate::types::{ParsedSegment, Session, Window, WindowState};
+use crate::backend::{
+    BackendCmd, BackendError, CmdResponse, GetTextCmd, Terminal, TerminalBackend, WindowId,
+};
+use crate::types::ParsedSegment;
 
 const SYSTEM_PROMPT: &str = "You are TAI, a terminal agent. You control terminal windows.
 
@@ -16,23 +18,13 @@ When a process finishes (exit code shown), analyze the result and decide next st
 #[derive(Debug, Clone, Default)]
 pub struct Prompt {
     pub system: String,
-    pub dashboard: Vec<WindowSummary>,
+    pub dashboard: Vec<Terminal>,
     pub focused_windows: Vec<WindowView>,
     pub previous_response: Option<AgentResponse>,
-    pub status: StatusInfo,
-}
-
-#[derive(Debug, Clone)]
-pub struct WindowSummary {
-    pub id: String,
-    pub title: String,
-    pub state_kind: WindowStateKind,
-    pub backend_id: Option<String>,
-    pub focused: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowStateKind {
+pub enum WindowStateSummary {
     Active,
     Frozen { exit_code: i32 },
     Archived,
@@ -40,17 +32,10 @@ pub enum WindowStateKind {
 
 #[derive(Debug, Clone)]
 pub struct WindowView {
-    pub id: String,
+    pub id: WindowId,
     pub title: String,
     pub content: String,
     pub exit_code: Option<i32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct StatusInfo {
-    pub active: usize,
-    pub frozen: usize,
-    pub focused: usize,
 }
 
 impl Prompt {
@@ -60,7 +45,6 @@ impl Prompt {
 
         parts.push(self.system.clone());
         parts.push(String::new());
-        parts.push(self.render_dashboard());
 
         for w in &self.focused_windows {
             parts.push(Self::render_window(w));
@@ -86,8 +70,9 @@ impl Prompt {
             );
         }
 
+        parts.push(self.render_dashboard());
+
         parts.push(String::new());
-        parts.push(self.render_status_bar());
 
         parts.join("\n")
     }
@@ -98,20 +83,13 @@ impl Prompt {
         if self.dashboard.is_empty() {
             lines.push("No windows.".to_string());
         } else {
-            for entry in &self.dashboard {
-                let state = match entry.state_kind {
-                    WindowStateKind::Active => {
-                        let bid = entry.backend_id.as_deref().unwrap_or("?");
-                        format!("[active] {} ({bid})", entry.title)
-                    }
-                    WindowStateKind::Frozen { exit_code } => {
-                        format!("[frozen] exit code: {exit_code}")
-                    }
-                    WindowStateKind::Archived => "[archived]".to_string(),
-                };
-                let focus = if entry.focused { " *" } else { "" };
-                lines.push(format!("- [{}] {state}{focus}", entry.id));
-            }
+            lines.push(format!("Oened {} teminals: ", {self.dashboard.len()}));
+            lines.extend(self.dashboard.iter().map(|w| {
+                format!(
+                    "{} | {} | pid {} | prompt: {}",
+                    w.id, w.title, w.pid, w.is_at_prompt
+                )
+            }));
         }
 
         lines.join("\n")
@@ -130,132 +108,67 @@ impl Prompt {
             w.content
         )
     }
-
-    fn render_status_bar(&self) -> String {
-        format!(
-            "[STATUS] Active: {} | Frozen: {} | Focused: {}",
-            self.status.active, self.status.frozen, self.status.focused
-        )
-    }
 }
 
 pub async fn build(
-    session: &Session,
     backend: &dyn TerminalBackend,
     previous_response: Option<AgentResponse>,
 ) -> Result<Prompt, PromptError> {
-    let dashboard = build_dashboard(session);
-    let focused_windows = collect_focused_windows(session, backend).await?;
-    let status = build_status(session);
+    let CmdResponse::Windows(list) = backend.execute(BackendCmd::List).await? else {
+        return Err(BackendError::Communication("unexpected response".into()).into());
+    };
+
+    let dashboard = build_dashboard(&list);
+    let focused_windows = collect_windows(backend, &list).await?;
 
     Ok(Prompt {
         system: SYSTEM_PROMPT.to_string(),
         dashboard,
         focused_windows,
         previous_response,
-        status,
     })
 }
 
-fn build_dashboard(session: &Session) -> Vec<WindowSummary> {
-    session
-        .windows
-        .iter()
-        .map(|w| {
-            let (state_kind, backend_id) = match &w.state {
-                WindowState::Active {
-                    backend_id,
-                    pid: _,
-                    title: _,
-                } => (WindowStateKind::Active, Some(backend_id.clone())),
-                WindowState::Frozen {
-                    content: _,
-                    exit_code,
-                    captured_at: _,
-                } => (
-                    WindowStateKind::Frozen {
-                        exit_code: *exit_code,
-                    },
-                    None,
-                ),
-                WindowState::Archived { .. } => (WindowStateKind::Archived, None),
-            };
-            let title = match &w.state {
-                WindowState::Active { title, .. } => title.clone(),
-                WindowState::Frozen { .. } | WindowState::Archived { .. } => String::new(),
-            };
-            WindowSummary {
-                id: w.id.clone(),
-                title,
-                state_kind,
-                backend_id,
-                focused: w.focused,
-            }
-        })
-        .collect()
+fn build_dashboard(list: &[Terminal]) -> Vec<Terminal> {
+    Vec::from(list)
 }
 
-async fn collect_focused_windows(
-    session: &Session,
-    backend: &dyn TerminalBackend,
-) -> Result<Vec<WindowView>, PromptError> {
+async fn collect_windows(backend: &dyn TerminalBackend, list: &Vec<Terminal>) -> Result<Vec<WindowView>, PromptError> {
     let mut views = Vec::new();
-    for window in session.focused_windows() {
+    for window in list {
         let content = get_window_content(window, backend).await?;
-        let title = match &window.state {
-            WindowState::Active { title, .. } => title.clone(),
-            WindowState::Frozen { .. } | WindowState::Archived { .. } => String::new(),
-        };
         views.push(WindowView {
             id: window.id.clone(),
-            title,
+            title: window.title.clone(),
             content,
-            exit_code: window.state.exit_code(),
+            exit_code: window.last_cmd_exit_status,
         });
     }
     Ok(views)
 }
 
 async fn get_window_content(
-    window: &Window,
+    window: &Terminal,
     backend: &dyn TerminalBackend,
 ) -> Result<String, PromptError> {
-    match &window.state {
-        WindowState::Active { backend_id, .. } => {
-            let id = WindowId(backend_id.clone());
-            match backend
-                .execute(BackendCmd::Get(GetTextCmd { window: id }))
-                .await
-            {
-                Ok(CmdResponse::Text(text)) => Ok(text),
-                Ok(CmdResponse::Error(e)) => Err(PromptError::Backend(
-                    crate::backend::BackendError::Communication(e),
-                )),
-                Ok(_) => Err(PromptError::Backend(
-                    crate::backend::BackendError::Communication("unexpected response".into()),
-                )),
-                Err(e) => Err(PromptError::Backend(e)),
-            }
-        }
-        WindowState::Frozen { content, .. } => Ok(content.clone()),
-        WindowState::Archived { .. } => Ok("[archived]".to_string()),
-    }
-}
-
-fn build_status(session: &Session) -> StatusInfo {
-    StatusInfo {
-        active: session.active_windows().count(),
-        frozen: session
-            .windows
-            .iter()
-            .filter(|w| w.state.is_frozen())
-            .count(),
-        focused: session.focused_windows().count(),
+    let id = window.id.clone();
+    match backend
+        .execute(BackendCmd::Get(GetTextCmd { window_id: id }))
+        .await
+    {
+        Ok(CmdResponse::Text(text)) => Ok(text),
+        Ok(CmdResponse::Error(e)) => Err(PromptError::Backend(
+            BackendError::Communication(e),
+        )),
+        Ok(_) => Err(PromptError::Backend(
+            BackendError::Communication("unexpected response".into()),
+        )),
+        Err(e) => Err(PromptError::Backend(e)),
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum PromptError {
     #[error("backend error: {0}")]
-    Backend(#[from] crate::backend::BackendError),
+    Backend(#[from] BackendError),
 }

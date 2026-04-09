@@ -1,3 +1,4 @@
+use std::any::Any;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -10,6 +11,10 @@ pub use test_agent::TestAgent;
 #[async_trait]
 pub trait Agent: Send + Sync {
     async fn step(&self, prompt: &Prompt) -> Result<AgentResponse, AgentError>;
+
+    fn as_any(&self) -> Option<&dyn Any> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
