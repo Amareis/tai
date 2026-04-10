@@ -25,6 +25,8 @@ pub enum BlockMode {
     Text,
     /// Закрыть окно
     Close,
+    /// Записать содержимое блока в файл напрямую (минуя shell)
+    Write,
 }
 
 impl std::str::FromStr for BlockMode {
@@ -34,6 +36,7 @@ impl std::str::FromStr for BlockMode {
         match s {
             "close" => Ok(Self::Close),
             "text" => Ok(Self::Text),
+            "write" => Ok(Self::Write),
             _ => Err(format!("unknown block mode: {s}")),
         }
     }
@@ -44,6 +47,7 @@ impl std::fmt::Display for BlockMode {
         match self {
             BlockMode::Text => f.write_str("text"),
             BlockMode::Close => f.write_str("close"),
+            BlockMode::Write => f.write_str("write"),
         }
     }
 }

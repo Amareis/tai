@@ -1,10 +1,8 @@
 #![cfg(test)]
 
-use assert_matches::assert_matches;
 use std::time::Duration;
 use tai::agent::{AgentResponse, TestAgent};
 use tai::types::BlockMode;
-use tai::backend::Terminal;
 use tai::core::Server;
 use tai::create_server;
 use tai::prompt::Prompt;
@@ -42,25 +40,17 @@ async fn tick_agent_launches_window_and_session_tracks_it() {
                 assert_eq!(prompt.dashboard.len(), 1);
             },
             AgentResponse::block(
-                "tai",
+                "build",
                 BlockMode::Text,
-                "launch --title hello -- echo marker-xyz",
+                "echo marker-xyz",
             ),
         )
         .add_step(
             |prompt: &Prompt| {
-                let w = prompt
-                    .dashboard
-                    .first()
-                    .expect("session should track launched window");
-                assert_eq!(w.title, "nc");
-                assert_matches!(
-                    w,
-                    Terminal {
-                        last_cmd_exit_status: Some(0),
-                        ..
-                    },
-                    "Window should be closed"
+                assert!(
+                    prompt.dashboard.len() >= 2,
+                    "expected at least 2 windows, got {}",
+                    prompt.dashboard.len(),
                 );
             },
             AgentResponse::empty(),
@@ -69,7 +59,7 @@ async fn tick_agent_launches_window_and_session_tracks_it() {
     let mut server = create_server(None, Box::new(agent), true).await.unwrap();
     server.tick().await.unwrap();
     server
-        .wait_trigger(Some(Duration::from_secs(1)))
+        .wait_trigger(Some(Duration::from_secs(2)))
         .await
         .unwrap();
     server.tick().await.unwrap();

@@ -1,12 +1,13 @@
 use std::fmt::Write;
 use std::time::Duration;
-
 use crate::agent::Agent;
+use crate::agent::AgentResponse;
 use crate::backend::watch::Watcher;
 use crate::backend::{BackendCmd, CloseCmd, CmdResponse, LaunchCmd, SetTitleCmd, TerminalBackend, WindowId};
 use crate::types::{BlockMode, ParsedSegment, TickTrigger};
 use rustyline_async::ReadlineError;
 use thiserror::Error;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::select;
 use tracing::info;
 
@@ -15,7 +16,7 @@ pub mod utils;
 use crate::prompt::Prompt;
 use utils::sleep_some_or_forever;
 
-const TRIGGER_TIMEOUT: Duration = Duration::from_secs(1);
+const TRIGGER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -43,6 +44,7 @@ pub struct Server {
     pub agent: Box<dyn Agent>,
     watcher: Watcher,
     pub debug: bool,
+    last_tick: Option<(AgentResponse, String)>,
 }
 
 impl Server {
@@ -53,36 +55,50 @@ impl Server {
             agent,
             watcher: Watcher::new(),
             debug: false,
+            last_tick: None,
         }
     }
 
     pub async fn run(&mut self) -> Result<(), CoreError> {
+        // 1. Создаем асинхронный stdin
+        let stdin = tokio::io::stdin();
+
+        // 2. Обязательно оборачиваем в BufReader для построчного чтения
+        let reader = BufReader::new(stdin);
+        let mut lines = reader.lines();
+
         let _ = self.back.execute(BackendCmd::Title(SetTitleCmd{
             window_id: WindowId("1".to_string()),
             title: vec!["task".to_string()]
         })).await;
         self.run_cmd("task", "watch -t cat TASK.md").await;
+        self.run_cmd("tree", "watch -t tree --gitignore").await;
 
         loop {
-            let _events = self.wait_trigger(Some(TRIGGER_TIMEOUT)).await?;
-            if !self.debug {
-                self.tick().await?;
+            if self.debug {
+                let _ = lines.next_line().await;
             }
+            let _events = self.wait_trigger(Some(TRIGGER_TIMEOUT)).await?;
+            self.tick().await?;
         }
     }
 
     pub async fn tick(&mut self) -> Result<(), CoreError> {
-        let prompt = Prompt::build(self.back.as_ref(), None).await?;
+        let (prev_response, prev_feedback) = match self.last_tick.take() {
+            Some((resp, fb)) => (Some(resp), Some(fb)),
+            None => (None, None),
+        };
+
+        let prompt = Prompt::build(self.back.as_ref(), prev_response, prev_feedback).await?;
 
         let response = self.agent.step(&prompt).await?;
 
         let results = self.execute_blocks(&response.segments).await;
 
-        let output = format_results(&response.segments, &results);
+        let feedback = format_results(&response.segments, &results);
 
-        if !output.is_empty() {
-            // self.client.write_line(&output).await?;
-        }
+        self.last_tick = Some((response.clone(), feedback));
+
         Ok(())
     }
 
@@ -134,6 +150,7 @@ impl Server {
         match mode {
             BlockMode::Close => self.execute_close(window).await,
             BlockMode::Text => self.execute_window_block(window, content).await,
+            BlockMode::Write => Self::execute_file_write(window, content),
         }
     }
 
@@ -189,6 +206,23 @@ impl Server {
             text: vec![text_to_send],
         });
         self.execute_backend_cmd(cmd, title).await
+    }
+
+    fn execute_file_write(path: &str, content: &str) -> BlockResult {
+        let file_path = std::path::Path::new(path);
+        if let Some(parent) = file_path.parent()
+            && !parent.as_os_str().is_empty()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return BlockResult::Error(path.to_string(), format!("mkdir failed: {e}"));
+        }
+        match std::fs::write(path, content) {
+            Ok(()) => {
+                let bytes = content.len();
+                BlockResult::Ok(format!("{path} ({bytes} bytes written)"))
+            }
+            Err(e) => BlockResult::Error(path.to_string(), format!("write failed: {e}")),
+        }
     }
 
     async fn execute_backend_cmd(&mut self, cmd: BackendCmd, target: &str) -> BlockResult {

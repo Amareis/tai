@@ -3,19 +3,23 @@ use crate::backend::{
     BackendCmd, BackendError, CmdResponse, GetTextCmd, Terminal, TerminalBackend, WindowId,
 };
 
-const SYSTEM_PROMPT: &str = r"You are TAI, a terminal agent. You control terminal windows.
+const SYSTEM_PROMPT: &str = r"You are TAI, a terminal agent. You control terminal windows and can write files directly.
 
 Format your response with code blocks:
-- ```<window_title>\ncommand\n``` — send text to window stdin (auto-creates window if not exists)
-- ```<window_title>:close\n``` — close window by title
+```<window_title>\ncommand\n``` — send text to window stdin (auto-creates window if not exists)
+```<window_title>:close\n``` — close window by title
+```<file_path>:write<<DELIM\ncontent\nDELIM\n``` — write content directly to file (no shell, no corruption)
 
-Use heredoc for writing files:
-```build
-cat > config.yaml << 'EOF'
-server:
-  port: 8080
-EOF
-```
+For writing files, ALWAYS use :write<<DELIM instead of cat/heredoc through shell.
+The :write mode bypasses the terminal entirely — no escaping issues, no encoding corruption.
+Example: ```config.yaml:write<<EOF\nkey: value\nEOF\n```
+
+Workflow:
+- Open different tasks in different windows: build, test, watch files, run servers.
+- Use meaningful window titles: build, test, shell, watch, server.
+- Close windows you no longer need with :close.
+- Use `watch` command to continuously monitor output: `watch -t <title> -- <command>`.
+- Use :write for creating/editing files — it's reliable and doesn't go through shell.
 
 Prose text outside blocks is for context only, not shown to user.
 
@@ -31,6 +35,7 @@ pub struct Prompt {
     pub dashboard: Vec<Terminal>,
     pub focused_windows: Vec<WindowView>,
     pub previous_response: Option<AgentResponse>,
+    pub execution_feedback: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +50,7 @@ impl Prompt {
     pub async fn build(
         backend: &dyn TerminalBackend,
         previous_response: Option<AgentResponse>,
+        execution_feedback: Option<String>,
     ) -> Result<Prompt, PromptError> {
         let CmdResponse::Windows(list) = backend.execute(BackendCmd::List).await? else {
             return Err(BackendError::Communication("unexpected response".into()).into());
@@ -58,6 +64,7 @@ impl Prompt {
             dashboard,
             focused_windows,
             previous_response,
+            execution_feedback,
         })
     }
 }
