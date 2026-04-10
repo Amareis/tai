@@ -78,7 +78,8 @@ pub async fn run_server(
         .with_env_filter(EnvFilter::from_default_env().add_directive("tai=info".parse()?))
         .init();
     let model = env::var("OPENAI_MODEL")?;
-    let agent = Box::new(LlmAgent::new(model));
+    let mut agent = Box::new(LlmAgent::new(model));
+    agent.debug = debug;
     let mut server = create_server(socket_path, agent, hidden).await?;
     server.debug = debug;
     if let Err(e) = server.run().await {

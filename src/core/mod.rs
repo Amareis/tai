@@ -69,7 +69,7 @@ impl Server {
             .await?;
 
         info!("model viewport initialized");
-
+        self.run_cmd("title 1 tai").await;
         self.run_cmd("help").await;
         self.run_cmd("launch -t TASK -- watch -t cat TASK.md").await;
 

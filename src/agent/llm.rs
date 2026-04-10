@@ -13,11 +13,12 @@ use futures_util::Stream;
 use futures_util::stream::StreamExt;
 use serde_json::Value;
 use std::pin::Pin;
-use tracing::error;
+use tracing::{error, info};
 
 pub struct LlmAgent {
     model: String,
     client: Client<OpenAIConfig>,
+    pub debug: bool,
 }
 
 impl LlmAgent {
@@ -26,6 +27,7 @@ impl LlmAgent {
         Self {
             model,
             client: Client::default(),
+            debug: false,
         }
     }
 }
@@ -41,6 +43,11 @@ impl Agent for LlmAgent {
             .messages(prompt_to_messages(prompt))
             .stream(true)
             .build()?;
+
+        if self.debug {
+            let s = toml::to_string(&request).unwrap_or_else(|e| e.to_string());
+            info!("Send request: {s}");
+        }
 
         let mut stream: MyStreamingType = self.client.chat().create_stream_byot(request).await?;
 

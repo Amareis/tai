@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hidden,
             debug
         } => {
-            let _ = dotenv::dotenv();
+            dotenv::dotenv()?;
             tai::run_server(socket.map(PathBuf::from), hidden, debug).await
         }
         Cli::Client { socket } => {
