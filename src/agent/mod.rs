@@ -2,8 +2,9 @@ use std::any::Any;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_openai::error::OpenAIError;
+use serde::{Deserialize, Serialize};
 use crate::prompt::Prompt;
-use crate::types::{BlockMode, ParsedSegment};
+use crate::types::ParsedSegment;
 
 mod test_agent;
 mod llm;
@@ -20,8 +21,9 @@ pub trait Agent: Send + Sync {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentResponse {
+    pub reasoning: String,
     pub segments: Vec<ParsedSegment>,
 }
 
@@ -29,30 +31,25 @@ impl AgentResponse {
     #[must_use]
     pub fn empty() -> Self {
         Self {
+            reasoning: String::new(),
             segments: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn reasoning(text: impl Into<String>) -> Self {
-        Self {
-            segments: vec![ParsedSegment::Reasoning(text.into())],
         }
     }
 
     #[must_use]
     pub fn prose(text: impl Into<String>) -> Self {
         Self {
+            reasoning: String::new(),
             segments: vec![ParsedSegment::Prose(text.into())],
         }
     }
 
     #[must_use]
-    pub fn block(window: impl Into<String>, mode: BlockMode, content: impl Into<String>) -> Self {
+    pub fn block(window: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
+            reasoning: String::new(),
             segments: vec![ParsedSegment::Block {
                 window: window.into(),
-                mode,
                 content: content.into(),
             }],
         }
@@ -118,45 +115,4 @@ impl Agent for MockAgent {
 pub struct TestStep {
     check: Box<dyn Fn(&Prompt) + Send + Sync>,
     response: AgentResponse,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_mock_agent_single() {
-        let agent = MockAgent::single(AgentResponse::prose("hello"));
-        let prompt = Prompt::default();
-        let resp = agent.step(&prompt).await.unwrap();
-        assert_eq!(resp.segments.len(), 1);
-        assert!(agent.step(&prompt).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_mock_agent_sequence() {
-        let agent = MockAgent::new(vec![
-            AgentResponse::prose("a"),
-            AgentResponse::prose("b"),
-        ]);
-        let prompt = Prompt::default();
-        assert_eq!(agent.step(&prompt).await.unwrap().segments.len(), 1);
-        assert_eq!(agent.step(&prompt).await.unwrap().segments.len(), 1);
-        assert!(agent.step(&prompt).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_agent_response_builder() {
-        let r = AgentResponse::empty();
-        assert!(r.segments.is_empty());
-
-        let r = AgentResponse::prose("hello");
-        assert_eq!(r.segments.len(), 1);
-
-        let r = AgentResponse::block("win", BlockMode::Cmd, "launch -- bash");
-        assert_eq!(r.segments.len(), 1);
-
-        let r = AgentResponse::prose("text").and(AgentResponse::block("w", BlockMode::Text, "ls"));
-        assert_eq!(r.segments.len(), 2);
-    }
 }

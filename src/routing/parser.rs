@@ -1,6 +1,6 @@
 use crate::backend::BackendCmd;
 use clap::error::ErrorKind;
-use clap::{Parser};
+use clap::Parser;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -135,7 +135,10 @@ mod tests {
     fn test_set_title() {
         let cmd = parse("title 1 my new title").unwrap();
         match cmd {
-            BackendCmd::Title(SetTitleCmd { window_id: window, title }) => {
+            BackendCmd::Title(SetTitleCmd {
+                window_id: window,
+                title,
+            }) => {
                 assert_eq!(window, WindowId("1".to_string()));
                 assert_eq!(title, vec!["my", "new", "title"]);
             }

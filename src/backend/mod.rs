@@ -68,9 +68,17 @@ pub struct LaunchCmd {
 pub struct SendTextCmd {
     /// ID окна
     pub window: WindowId,
-    /// Текст для отправки
+    /// Текст для отправки (аргументы объединяются через пробел)
     #[arg(trailing_var_arg = true)]
     pub text: Vec<String>,
+}
+
+impl SendTextCmd {
+    /// Возвращает текст как единую строку (аргументы объединены через пробел).
+    #[must_use]
+    pub fn text_joined(&self) -> String {
+        self.text.join(" ")
+    }
 }
 
 /// Команда отправки клавиш в окно.
@@ -160,6 +168,7 @@ pub trait TerminalBackend: Send + Sync {
     /// Единая точка входа для всех операций с терминалом.
     /// Pipeline: строка → clap → `BackendCmd` → `execute()` → `CmdResponse`
     async fn execute(&self, cmd: BackendCmd) -> Result<CmdResponse, BackendError>;
+    async fn cmd_launch(&self, cmd: &LaunchCmd) -> Result<WindowId, BackendError>;
 }
 
 /// Ошибки терминального backend.

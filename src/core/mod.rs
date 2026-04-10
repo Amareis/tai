@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use crate::agent::Agent;
 use crate::backend::watch::Watcher;
-use crate::backend::{BackendCmd, CmdResponse, TerminalBackend, WindowId};
+use crate::backend::{BackendCmd, CmdResponse, LaunchCmd, TerminalBackend, WindowId};
 use crate::routing::{ParseError, parser};
-use crate::types::{BlockMode, ParsedSegment, TickTrigger};
+use crate::types::{ParsedSegment, TickTrigger};
 use connection::Connection;
 use rustyline_async::ReadlineError;
 use thiserror::Error;
@@ -135,7 +135,6 @@ impl Server {
     async fn run_cmd(&mut self, content: &str) {
         let seg = vec![ParsedSegment::Block {
             window: "tai".to_string(),
-            mode: BlockMode::Cmd,
             content: content.to_string(),
         }];
         let res = self.execute_blocks(&seg).await;
@@ -146,13 +145,8 @@ impl Server {
         let mut results = Vec::new();
 
         for segment in segments {
-            if let ParsedSegment::Block {
-                window,
-                mode,
-                content,
-            } = segment
-            {
-                let result = self.execute_block(window, mode, content).await;
+            if let ParsedSegment::Block { window, content } = segment {
+                let result = self.execute_block(window, content).await;
                 results.push(result);
             }
         }
@@ -160,50 +154,82 @@ impl Server {
         results
     }
 
-    async fn execute_block(
-        &mut self,
-        window: &str,
-        mode: &BlockMode,
-        content: &str,
-    ) -> BlockResult {
-        match mode {
-            BlockMode::Text => {
-                let _ = self
-                    .client
-                    .write_line(&format!("send {window} {content}"))
-                    .await;
-                let cmd = BackendCmd::Send(crate::backend::SendTextCmd {
-                    window: WindowId(window.to_string()),
-                    text: vec![content.to_string()],
-                });
-                self.execute_backend_cmd(cmd, window).await
+    async fn execute_block(&mut self, window: &str, content: &str) -> BlockResult {
+        if window == "tai" {
+            self.execute_tai_command(content).await
+        } else {
+            self.execute_window_block(window, content).await
+        }
+    }
+
+    async fn execute_tai_command(&mut self, content: &str) -> BlockResult {
+        let _ = self.client.write_line(content).await;
+        let mut last_result = BlockResult::Ok("tai".to_string());
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
             }
-            BlockMode::Keys => {
-                let _ = self
-                    .client
-                    .write_line(&format!("keys {window} {content}"))
-                    .await;
-                let keys: Vec<String> = content.split_whitespace().map(String::from).collect();
-                let cmd = BackendCmd::Keys(crate::backend::SendKeysCmd {
-                    window: WindowId(window.to_string()),
-                    keys,
-                });
-                self.execute_backend_cmd(cmd, window).await
-            }
-            BlockMode::Cmd => {
-                let _ = self.client.write_line(content).await;
-                match parser::parse(content) {
-                    Ok(cmd) => self.execute_backend_cmd(cmd, "tai").await,
-                    Err(e) => {
-                        if let ParseError::Help(help) = e {
-                            BlockResult::Text("tai".to_string(), help)
-                        } else {
-                            BlockResult::Error("tai".to_string(), e.to_string())
-                        }
-                    }
+            match parser::parse(trimmed) {
+                Ok(cmd) => {
+                    last_result = self.execute_backend_cmd(cmd, "tai").await;
+                }
+                Err(e) => {
+                    last_result = if let ParseError::Help(help) = e {
+                        BlockResult::Text("tai".to_string(), help)
+                    } else {
+                        BlockResult::Error("tai".to_string(), e.to_string())
+                    };
                 }
             }
         }
+
+        last_result
+    }
+
+    async fn get_id_for_title(&mut self, title: &str) -> Option<WindowId> {
+        match self.back.execute(BackendCmd::List).await {
+            Ok(CmdResponse::Windows(windows)) => windows
+                .iter()
+                .find(|w| w.title == title)
+                .map(|w| w.id.clone()),
+            _ => None,
+        }
+    }
+
+    async fn execute_window_block(&mut self, title: &str, content: &str) -> BlockResult {
+        let id = if let Some(id) = self.get_id_for_title(title).await {
+            id
+        } else {
+            let launch_cmd = LaunchCmd {
+                title: Some(title.to_string()),
+                command: vec!["zsh".to_string()],
+            };
+            let id = match self.back.cmd_launch(&launch_cmd).await {
+                Ok(id) => id,
+                Err(e) => {
+                    return BlockResult::Error(title.to_string(), format!("launch failed: {e}"));
+                }
+            };
+            let _ = self
+                .client
+                .write_line(&format!("[{title}] launched new window with id {id}"))
+                .await;
+            id
+        };
+
+        let _ = self
+            .client
+            .write_line(&format!("```{title}\n{content}```"))
+            .await;
+
+        let text_to_send = format!("{content}\n");
+        let cmd = BackendCmd::Send(crate::backend::SendTextCmd {
+            window: id,
+            text: vec![text_to_send],
+        });
+        self.execute_backend_cmd(cmd, title).await
     }
 
     async fn execute_backend_cmd(&mut self, cmd: BackendCmd, target: &str) -> BlockResult {

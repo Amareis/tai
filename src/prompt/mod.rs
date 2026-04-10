@@ -3,22 +3,28 @@ use crate::backend::{
     BackendCmd, BackendError, CmdResponse, GetTextCmd, Terminal, TerminalBackend, WindowId,
 };
 
-const SYSTEM_PROMPT: &str = r#""You are TAI, a terminal agent. You control terminal windows.
+const SYSTEM_PROMPT: &str = r"You are TAI, a terminal agent. You control terminal windows.
 
 Format your response with code blocks:
-- ```tai:cmd\nlaunch --title name -- command\n``` — TAI commands, USE IT FOR MANAGING TERMINALS
-- ```<window_id>:text\ncommand\n``` — send text to window stdin, WITGOUT RETURN
-- ```<window_id>:keys\nkey1 key2\n``` — send keypresses
+- \n```<window_title>\ncommand\n``` — send text to window (auto-creates if not exists, JUST USE THIS INSTAEAD OF LAUNCH)
+- \n```tai\nclose build\n``` — TAI management commands (close for primary use)
+IMPORTANT: ADD NEWLINE BEFRE CODE BLOCKS.
 
-Текст снаружи блоков пользователю НЕ ВИДЕН.
+All blocks send content to the window's stdin. Use heredoc for writing files:
+```build
+cat > config.yaml << 'EOF'
+server:
+  port: 8080
+EOF
+```
+
+Prose text outside blocks is for context only, not shown to user.
 
 When a process finishes (exit code shown), analyze the result and decide next steps.
-ВНИМАНИЕ! История твоих действий сохраняется только на один шаг - это твое "предыдущее действие".
-ПОЭТОМУ - тебе надо внимательно анализировать все и сохранять процесс мышления отдельно.
+Your action history is preserved for one step only. Analyze carefully.
 
-ВСЕ СООБЩЕНИЯ ОТ ПОЛЬЗОВАТЕЛЯ - АВТОМАТИЧЕСКИЕ. Их отправляет система.
-Чтобы понять что тебе нужно сделать - смотри терминал task.
-"#;
+ALL USER MESSAGES ARE AUTOMATIC. Look at the task terminal for instructions.
+";
 
 #[derive(Debug, Clone, Default)]
 pub struct Prompt {

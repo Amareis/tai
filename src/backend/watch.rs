@@ -88,9 +88,7 @@ impl Watcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{
-        BackendCmd, BackendError, CmdResponse, Terminal, TerminalBackend, WindowId,
-    };
+    use crate::backend::{BackendCmd, BackendError, CmdResponse, LaunchCmd, Terminal, TerminalBackend, WindowId};
     use assert_matches::assert_matches;
     use async_trait::async_trait;
     use std::sync::Arc;
@@ -188,6 +186,10 @@ mod tests {
                     ))
                 }
             }
+        }
+
+        async fn cmd_launch(&self, _cmd: &LaunchCmd) -> Result<WindowId, BackendError> {
+            Ok(WindowId("mock-1".to_string()))
         }
     }
 

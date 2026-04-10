@@ -6,14 +6,13 @@ use tai::agent::{AgentResponse, TestAgent};
 use tai::backend::Terminal;
 use tai::core::Server;
 use tai::create_server;
-use tai::prompt::{Prompt};
-use tai::types::{BlockMode};
+use tai::prompt::Prompt;
 use tracing_test::traced_test;
 
 fn assert_test_agent(server: &Server) {
-    server.agent.as_any().expect("Должен быть as_any в TestAgent")
+    server.agent.as_any().expect("expected as_any in TestAgent")
         .downcast_ref::<TestAgent>()
-        .expect("Должен быть TestAgent").assert_all_consumed();
+        .expect("expected TestAgent").assert_all_consumed();
 }
 
 #[tokio::test]
@@ -43,7 +42,6 @@ async fn tick_agent_launches_window_and_session_tracks_it() {
             },
             AgentResponse::block(
                 "tai",
-                BlockMode::Cmd,
                 "launch --title hello -- echo marker-xyz",
             ),
         )

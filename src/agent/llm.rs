@@ -1,6 +1,6 @@
 use super::{Agent, AgentError, AgentResponse};
 use crate::prompt::{Prompt, WindowView};
-use crate::response::parse_response;
+use crate::response::{parse_response};
 use crate::types::ParsedSegment;
 use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
@@ -52,14 +52,17 @@ impl Agent for LlmAgent {
         let mut stream: MyStreamingType = self.client.chat().create_stream_byot(request).await?;
 
         let mut text = String::new();
-        let mut thinks = true;
+        let mut reasoning = String::new();
+        let mut thinks = false;
 
         while let Some(result) = stream.next().await {
             match result {
                 Ok(res) => {
                     if let Some(content) = res["choices"][0]["delta"]["reasoning_content"].as_str()
                     {
+                        thinks = true;
                         print!("{content}");
+                        reasoning.push_str(content);
                     }
 
                     if let Some(content) = res["choices"][0]["delta"]["content"].as_str() {
@@ -76,10 +79,19 @@ impl Agent for LlmAgent {
                 }
             }
         }
+        println!("\nDONE");
 
-        Ok(AgentResponse {
-            segments: parse_response(&text),
-        })
+        let resp = AgentResponse{
+            reasoning,
+            segments: parse_response(&text)
+        };
+
+        if self.debug {
+            let s = toml::to_string_pretty(&resp).unwrap_or_else(|e| e.to_string());
+            info!("Response: {s}");
+        }
+
+        Ok(resp)
     }
 }
 
@@ -99,15 +111,10 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
             prev.segments
                 .iter()
                 .map(|s| match s {
-                    ParsedSegment::Block {
-                        window,
-                        content,
-                        mode,
-                    } => {
-                        format!("```{window}:{mode}\n{content}```")
+                    ParsedSegment::Block { window, content } => {
+                        format!("```{window}\n{content}\n```")
                     }
                     ParsedSegment::Prose(t) => t.clone(),
-                    ParsedSegment::Reasoning(t) => format!("```REASONING\n{t}```"),
                 })
                 .collect(),
         );

@@ -150,9 +150,7 @@ impl TerminalBackend for KittyBackend {
             BackendCmd::Title(c) => self.cmd_set_title(&c).await.map(|()| CmdResponse::Ok),
         }
     }
-}
 
-impl KittyBackend {
     async fn cmd_launch(&self, cmd: &LaunchCmd) -> Result<WindowId, BackendError> {
         let title = cmd.title.as_deref().unwrap_or("tai");
 
@@ -199,11 +197,13 @@ impl KittyBackend {
 
         Ok(WindowId(window_id))
     }
+}
+
+impl KittyBackend {
 
     async fn cmd_send_text(&self, cmd: &SendTextCmd) -> Result<(), BackendError> {
         let match_spec = Self::match_by_id(&cmd.window);
-        let text = cmd.text.join(" ");
-        let data = format!("text:{text}");
+        let data = format!("text:{}", cmd.text_joined());
 
         let msg = SendTextCommand::new(&data)
             .match_spec(&match_spec)
