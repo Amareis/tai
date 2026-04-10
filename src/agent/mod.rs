@@ -1,12 +1,15 @@
 use std::any::Any;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
+use async_openai::error::OpenAIError;
 use crate::prompt::Prompt;
 use crate::types::{BlockMode, ParsedSegment};
 
 mod test_agent;
+mod llm;
+
 pub use test_agent::TestAgent;
+pub use llm::LlmAgent;
 
 #[async_trait]
 pub trait Agent: Send + Sync {
@@ -27,6 +30,13 @@ impl AgentResponse {
     pub fn empty() -> Self {
         Self {
             segments: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn reasoning(text: impl Into<String>) -> Self {
+        Self {
+            segments: vec![ParsedSegment::Reasoning(text.into())],
         }
     }
 
@@ -61,6 +71,8 @@ pub enum AgentError {
     Api(String),
     #[error("timeout")]
     Timeout,
+    #[error("LLM error: {0}")]
+    Llm(#[from] OpenAIError),
 }
 
 pub struct NopAgent;

@@ -54,6 +54,7 @@ impl std::fmt::Display for BlockMode {
 /// Сегмент ответа модели после парсинга.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedSegment {
+    Reasoning(String),
     /// Code block: ` ```window:mode\ncontent\n``` `
     Block {
         window: String,

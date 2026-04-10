@@ -14,6 +14,7 @@ pub enum ParseError {
 #[command(name = "tai")]
 #[command(multicall = true)]
 #[command(disable_help_flag = true)]
+#[command(flatten_help = true)]
 struct TaiCli {
     #[command(subcommand)]
     command: BackendCmd,

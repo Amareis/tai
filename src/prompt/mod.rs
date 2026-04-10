@@ -2,18 +2,23 @@ use crate::agent::AgentResponse;
 use crate::backend::{
     BackendCmd, BackendError, CmdResponse, GetTextCmd, Terminal, TerminalBackend, WindowId,
 };
-use crate::types::ParsedSegment;
 
-const SYSTEM_PROMPT: &str = "You are TAI, a terminal agent. You control terminal windows.
+const SYSTEM_PROMPT: &str = r#""You are TAI, a terminal agent. You control terminal windows.
 
 Format your response with code blocks:
 - ```<window_id>:text\ncommand\n``` — send text to window stdin
 - ```<window_id>:keys\nkey1 key2\n``` — send keypresses
 - ```tai:cmd\nlaunch --title name -- command\n``` — TAI commands
 
-Text outside blocks goes to chat.
+Текст снаружи блоков пользователю НЕ ВИДЕН.
 
-When a process finishes (exit code shown), analyze the result and decide next steps.";
+When a process finishes (exit code shown), analyze the result and decide next steps.
+ВНИМАНИЕ! История твоих действий сохраняется только на один шаг - это твое "предыдущее действие".
+ПОЭТОМУ - тебе надо внимательно анализировать все и сохранять процесс мышления отдельно.
+
+ВСЕ СООБЩЕНИЯ ОТ ПОЛЬЗОВАТЕЛЯ - АВТОМАТИЧЕСКИЕ. Их отправляет система.
+Чтобы понять что тебе нужно сделать - смотри терминал task.
+"#;
 
 #[derive(Debug, Clone, Default)]
 pub struct Prompt {
@@ -21,13 +26,6 @@ pub struct Prompt {
     pub dashboard: Vec<Terminal>,
     pub focused_windows: Vec<WindowView>,
     pub previous_response: Option<AgentResponse>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowStateSummary {
-    Active,
-    Frozen { exit_code: i32 },
-    Archived,
 }
 
 #[derive(Debug, Clone)]
@@ -39,94 +37,24 @@ pub struct WindowView {
 }
 
 impl Prompt {
-    #[must_use]
-    pub fn to_text(&self) -> String {
-        let mut parts = Vec::new();
+    pub async fn build(
+        backend: &dyn TerminalBackend,
+        previous_response: Option<AgentResponse>,
+    ) -> Result<Prompt, PromptError> {
+        let CmdResponse::Windows(list) = backend.execute(BackendCmd::List).await? else {
+            return Err(BackendError::Communication("unexpected response".into()).into());
+        };
 
-        parts.push(self.system.clone());
-        parts.push(String::new());
+        let dashboard = build_dashboard(&list);
+        let focused_windows = collect_windows(backend, &list).await?;
 
-        for w in &self.focused_windows {
-            parts.push(Self::render_window(w));
-        }
-
-        if let Some(prev) = &self.previous_response {
-            parts.push(String::new());
-            parts.push("## Your previous response".to_string());
-            parts.push(
-                prev.segments
-                    .iter()
-                    .map(|s| match s {
-                        ParsedSegment::Block {
-                            window,
-                            content,
-                            mode,
-                        } => {
-                            format!("```{window}:{mode}\n{content}```")
-                        }
-                        ParsedSegment::Prose(t) => t.clone(),
-                    })
-                    .collect(),
-            );
-        }
-
-        parts.push(self.render_dashboard());
-
-        parts.push(String::new());
-
-        parts.join("\n")
+        Ok(Prompt {
+            system: SYSTEM_PROMPT.to_string(),
+            dashboard,
+            focused_windows,
+            previous_response,
+        })
     }
-
-    fn render_dashboard(&self) -> String {
-        let mut lines = vec!["## Dashboard".to_string()];
-
-        if self.dashboard.is_empty() {
-            lines.push("No windows.".to_string());
-        } else {
-            lines.push(format!("Oened {} teminals: ", {self.dashboard.len()}));
-            lines.extend(self.dashboard.iter().map(|w| {
-                format!(
-                    "{} | {} | pid {} | prompt: {}",
-                    w.id, w.title, w.pid, w.is_at_prompt
-                )
-            }));
-        }
-
-        lines.join("\n")
-    }
-
-    fn render_window(w: &WindowView) -> String {
-        let exit_info = w
-            .exit_code
-            .map_or(String::new(), |c| format!("\n**Exit code: {c}**"));
-        format!(
-            "## Window [{}] {} (focused)\n{}{}\n```\n{}\n```",
-            w.id,
-            w.title,
-            exit_info,
-            if exit_info.is_empty() { "" } else { "\n" },
-            w.content
-        )
-    }
-}
-
-pub async fn build(
-    backend: &dyn TerminalBackend,
-    previous_response: Option<AgentResponse>,
-) -> Result<Prompt, PromptError> {
-    let CmdResponse::Windows(list) = backend.execute(BackendCmd::List).await? else {
-        return Err(BackendError::Communication("unexpected response".into()).into());
-    };
-
-    let dashboard = build_dashboard(&list);
-    let focused_windows = collect_windows(backend, &list).await?;
-
-    Ok(Prompt {
-        system: SYSTEM_PROMPT.to_string(),
-        dashboard,
-        focused_windows,
-        previous_response,
-    })
 }
 
 fn build_dashboard(list: &[Terminal]) -> Vec<Terminal> {

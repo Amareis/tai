@@ -7,12 +7,13 @@ pub mod response;
 pub mod routing;
 pub mod types;
 
-use crate::agent::{Agent, NopAgent};
+use crate::agent::{Agent, LlmAgent};
 use crate::core::connection::Connection;
 use crate::core::{Client, Server, utils::bind};
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
+use tracing::error;
 use tracing_subscriber::EnvFilter;
 
 /// Создание TAI сервера: User viewport + Kitty + Model viewport.
@@ -71,13 +72,17 @@ pub async fn create_server(
 pub async fn run_server(
     socket_path: Option<PathBuf>,
     hidden: bool,
+    debug: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("tai=info".parse()?))
         .init();
-    let agent = Box::new(NopAgent);
+    let agent = Box::new(LlmAgent::new());
     let mut server = create_server(socket_path, agent, hidden).await?;
-    let _ = server.run().await;
+    server.debug = debug;
+    if let Err(e) = server.run().await {
+        error!("Server run error: {}", e);
+    }
     Ok(())
 }
 

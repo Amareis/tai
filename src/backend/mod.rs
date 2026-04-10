@@ -57,7 +57,8 @@ pub struct LaunchCmd {
     /// Заголовок окна
     #[arg(short, long)]
     pub title: Option<String>,
-    /// Команда для запуска (argv)
+    /// Команда для запуска (argv), запускается через "zsh -c".
+    /// Если команды нет - запускается просто zsh.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
 }
@@ -106,12 +107,7 @@ pub struct SetTitleCmd {
     pub title: Vec<String>,
 }
 
-/// Команда для терминального backend.
-///
-/// Человек (и модель через code blocks) пишет текстовые команды.
-/// Clap парсит строку в `BackendCmd` enum.
-/// Ошибка парсинга → сразу feedback, даже до backend'а не доходит.
-/// Успех → `backend.execute(cmd)`.
+/// Команды для управления терминалами.
 #[derive(Debug, Clone, PartialEq, Subcommand)]
 pub enum BackendCmd {
     /// Запустить новое терминальное окно

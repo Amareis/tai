@@ -14,6 +14,10 @@ enum Cli {
         /// Start kitty hidden
         #[arg(long)]
         hidden: bool,
+
+        /// Start kitty hidden
+        #[arg(long, short)]
+        debug: bool,
     },
 
     /// Run inside Kitty — pass stdin/stdout FD to server
@@ -25,24 +29,20 @@ enum Cli {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli {
         Cli::Server {
             socket,
             hidden,
+            debug
         } => {
-            if let Err(e) = tai::run_server(socket.map(PathBuf::from), hidden).await {
-                eprintln!("error: {e}");
-                std::process::exit(1);
-            }
+            let _ = dotenv::dotenv();
+            tai::run_server(socket.map(PathBuf::from), hidden, debug).await
         }
         Cli::Client { socket } => {
-            if let Err(e) = tai::run_client(PathBuf::from(socket)).await {
-                eprintln!("error: {e}");
-                std::process::exit(1);
-            }
+            tai::run_client(PathBuf::from(socket)).await
         }
     }
 }
