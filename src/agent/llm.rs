@@ -16,19 +16,15 @@ use std::pin::Pin;
 use tracing::error;
 
 pub struct LlmAgent {
+    model: String,
     client: Client<OpenAIConfig>,
-}
-
-impl Default for LlmAgent {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl LlmAgent {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(model: String) -> Self {
         Self {
+            model,
             client: Client::default(),
         }
     }
@@ -41,7 +37,7 @@ impl Agent for LlmAgent {
     #[allow(clippy::indexing_slicing)]
     async fn step(&self, prompt: &Prompt) -> Result<AgentResponse, AgentError> {
         let request = CreateChatCompletionRequestArgs::default()
-            .model("glm-5.1")
+            .model(&self.model)
             .messages(prompt_to_messages(prompt))
             .stream(true)
             .build()?;
