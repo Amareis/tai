@@ -61,7 +61,7 @@ impl KittyBackend {
 
         cmd.args(run_cmd);
 
-        tracing::info!("starting KittyBackend, args: {:?}", run_cmd);
+        tracing::info!("starting KittyBackend, cmd: {:?}", cmd);
 
         let child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {

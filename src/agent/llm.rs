@@ -1,7 +1,7 @@
 use super::{Agent, AgentError, AgentResponse};
 use crate::prompt::{Prompt, WindowView};
 use crate::response::{parse_response};
-use crate::types::ParsedSegment;
+use crate::types::{BlockMode, ParsedSegment};
 use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
@@ -65,7 +65,7 @@ impl Agent for LlmAgent {
                         reasoning.push_str(content);
                     }
 
-                    if let Some(content) = res["choices"][0]["delta"]["content"].as_str() {
+                    if let Some(content) = res["choices"][0]["delta"]["content"].as_str() && !content.is_empty() {
                         if thinks {
                             thinks = false;
                             println!("\n\nTHINK END\n");
@@ -111,8 +111,14 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
             prev.segments
                 .iter()
                 .map(|s| match s {
-                    ParsedSegment::Block { window, content } => {
-                        format!("```{window}\n{content}\n```")
+                    ParsedSegment::Block { window, mode, content } => {
+                        if *mode == BlockMode::Text && content.is_empty() {
+                            format!("```{window}\n```")
+                        } else if *mode == BlockMode::Close {
+                            format!("```{window}:close\n```")
+                        } else {
+                            format!("```{window}\n{content}\n```")
+                        }
                     }
                     ParsedSegment::Prose(t) => t.clone(),
                 })

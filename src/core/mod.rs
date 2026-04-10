@@ -3,21 +3,16 @@ use std::time::Duration;
 
 use crate::agent::Agent;
 use crate::backend::watch::Watcher;
-use crate::backend::{BackendCmd, CmdResponse, LaunchCmd, TerminalBackend, WindowId};
-use crate::routing::{ParseError, parser};
-use crate::types::{ParsedSegment, TickTrigger};
-use connection::Connection;
+use crate::backend::{BackendCmd, CloseCmd, CmdResponse, LaunchCmd, SetTitleCmd, TerminalBackend, WindowId};
+use crate::types::{BlockMode, ParsedSegment, TickTrigger};
 use rustyline_async::ReadlineError;
 use thiserror::Error;
 use tokio::select;
 use tracing::info;
 
-mod client;
-pub mod connection;
 pub mod utils;
 
 use crate::prompt::Prompt;
-pub use client::Client;
 use utils::sleep_some_or_forever;
 
 const TRIGGER_TIMEOUT: Duration = Duration::from_secs(1);
@@ -44,7 +39,6 @@ pub enum CoreError {
 }
 
 pub struct Server {
-    client: Connection,
     back: Box<dyn TerminalBackend>,
     pub agent: Box<dyn Agent>,
     watcher: Watcher,
@@ -53,9 +47,8 @@ pub struct Server {
 
 impl Server {
     #[must_use]
-    pub fn new(client: Connection, back: Box<dyn TerminalBackend>, agent: Box<dyn Agent>) -> Self {
+    pub fn new(back: Box<dyn TerminalBackend>, agent: Box<dyn Agent>) -> Self {
         Self {
-            client,
             back,
             agent,
             watcher: Watcher::new(),
@@ -64,18 +57,11 @@ impl Server {
     }
 
     pub async fn run(&mut self) -> Result<(), CoreError> {
-        self.client
-            .write_line("TAI Server ready. Type commands in this window.")
-            .await?;
-
-        info!("model viewport initialized");
-        self.run_cmd("title 1 tai").await;
-        self.run_cmd("help").await;
-        self.run_cmd("launch -t TASK -- watch -t cat TASK.md").await;
-
-        if !self.debug {
-            self.tick().await?;
-        }
+        let _ = self.back.execute(BackendCmd::Title(SetTitleCmd{
+            window_id: WindowId("1".to_string()),
+            title: vec!["task".to_string()]
+        })).await;
+        self.run_cmd("task", "watch -t cat TASK.md").await;
 
         loop {
             let _events = self.wait_trigger(Some(TRIGGER_TIMEOUT)).await?;
@@ -95,7 +81,7 @@ impl Server {
         let output = format_results(&response.segments, &results);
 
         if !output.is_empty() {
-            self.client.write_line(&output).await?;
+            // self.client.write_line(&output).await?;
         }
         Ok(())
     }
@@ -111,42 +97,27 @@ impl Server {
         }
 
         select! {
-            result = self.client.read_line() => {
-                info!("client line: {result:?}");
-                match result {
-                    Ok(Some(line)) => {
-                        if line == "ai" {
-                            self.tick().await?;
-                        } else {
-                            self.run_cmd(&line).await;
-                        }
-                        Ok(TickTrigger::UserMessage)
-                    },
-                    Ok(None) => Err(CoreError::ConnectionClosed),
-                    Err(e) => Err(e),
-                }
-            }
             () = sleep_some_or_forever(timeout) => {
                 Ok(TickTrigger::IdleTimeout)
             },
         }
     }
 
-    async fn run_cmd(&mut self, content: &str) {
+    async fn run_cmd(&mut self, window: &str, content: &str) {
         let seg = vec![ParsedSegment::Block {
-            window: "tai".to_string(),
+            window: window.to_string(),
+            mode: BlockMode::Text,
             content: content.to_string(),
         }];
-        let res = self.execute_blocks(&seg).await;
-        let _ = self.client.write_line(&format_results(&seg, &res)).await;
+        let _ = self.execute_blocks(&seg).await;
     }
 
     async fn execute_blocks(&mut self, segments: &[ParsedSegment]) -> Vec<BlockResult> {
         let mut results = Vec::new();
 
         for segment in segments {
-            if let ParsedSegment::Block { window, content } = segment {
-                let result = self.execute_block(window, content).await;
+            if let ParsedSegment::Block { window, mode, content } = segment {
+                let result = self.execute_block(window, mode, content).await;
                 results.push(result);
             }
         }
@@ -154,38 +125,27 @@ impl Server {
         results
     }
 
-    async fn execute_block(&mut self, window: &str, content: &str) -> BlockResult {
-        if window == "tai" {
-            self.execute_tai_command(content).await
-        } else {
-            self.execute_window_block(window, content).await
+    async fn execute_block(
+        &mut self,
+        window: &str,
+        mode: &BlockMode,
+        content: &str,
+    ) -> BlockResult {
+        match mode {
+            BlockMode::Close => self.execute_close(window).await,
+            BlockMode::Text => self.execute_window_block(window, content).await,
         }
     }
 
-    async fn execute_tai_command(&mut self, content: &str) -> BlockResult {
-        let _ = self.client.write_line(content).await;
-        let mut last_result = BlockResult::Ok("tai".to_string());
-
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            match parser::parse(trimmed) {
-                Ok(cmd) => {
-                    last_result = self.execute_backend_cmd(cmd, "tai").await;
-                }
-                Err(e) => {
-                    last_result = if let ParseError::Help(help) = e {
-                        BlockResult::Text("tai".to_string(), help)
-                    } else {
-                        BlockResult::Error("tai".to_string(), e.to_string())
-                    };
-                }
-            }
+    async fn execute_close(&mut self, title: &str) -> BlockResult {
+        if let Some(id) = self.get_id_for_title(title).await {
+            let cmd = BackendCmd::Close(CloseCmd {
+                window_id: id,
+            });
+            self.execute_backend_cmd(cmd, title).await
+        } else {
+            BlockResult::Error(title.to_string(), format!("window '{title}' not found"))
         }
-
-        last_result
     }
 
     async fn get_id_for_title(&mut self, title: &str) -> Option<WindowId> {
@@ -202,27 +162,26 @@ impl Server {
         let id = if let Some(id) = self.get_id_for_title(title).await {
             id
         } else {
-            let launch_cmd = LaunchCmd {
+            let launch_cmd = BackendCmd::Launch(LaunchCmd {
                 title: Some(title.to_string()),
                 command: vec!["zsh".to_string()],
-            };
-            let id = match self.back.cmd_launch(&launch_cmd).await {
-                Ok(id) => id,
+            });
+            match self.back.execute(launch_cmd).await {
+                Ok(CmdResponse::WindowCreated(id)) => {
+                    self.watcher.track(id.clone(), true);
+                    id
+                }
+                Ok(CmdResponse::Error(e)) => {
+                    return BlockResult::Error(title.to_string(), format!("launch failed: {e}"));
+                }
+                Ok(_) => {
+                    return BlockResult::Error(title.to_string(), "unexpected response from launch".to_string());
+                }
                 Err(e) => {
                     return BlockResult::Error(title.to_string(), format!("launch failed: {e}"));
                 }
-            };
-            let _ = self
-                .client
-                .write_line(&format!("[{title}] launched new window with id {id}"))
-                .await;
-            id
+            }
         };
-
-        let _ = self
-            .client
-            .write_line(&format!("```{title}\n{content}```"))
-            .await;
 
         let text_to_send = format!("{content}\n");
         let cmd = BackendCmd::Send(crate::backend::SendTextCmd {

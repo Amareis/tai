@@ -3,6 +3,7 @@
 use assert_matches::assert_matches;
 use std::time::Duration;
 use tai::agent::{AgentResponse, TestAgent};
+use tai::types::BlockMode;
 use tai::backend::Terminal;
 use tai::core::Server;
 use tai::create_server;
@@ -42,6 +43,7 @@ async fn tick_agent_launches_window_and_session_tracks_it() {
             },
             AgentResponse::block(
                 "tai",
+                BlockMode::Text,
                 "launch --title hello -- echo marker-xyz",
             ),
         )

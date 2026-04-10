@@ -19,13 +19,6 @@ enum Cli {
         #[arg(long, short)]
         debug: bool,
     },
-
-    /// Run inside Kitty — pass stdin/stdout FD to server
-    Client {
-        /// Unix socket path to connect to
-        #[arg(long)]
-        socket: String,
-    },
 }
 
 #[tokio::main]
@@ -40,9 +33,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             dotenv::dotenv()?;
             tai::run_server(socket.map(PathBuf::from), hidden, debug).await
-        }
-        Cli::Client { socket } => {
-            tai::run_client(PathBuf::from(socket)).await
         }
     }
 }

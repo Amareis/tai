@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::backend::Terminal;
+use serde::{Deserialize, Serialize};
 
 /// Триггер нового тика (цикла ядра).
 ///
@@ -16,15 +16,50 @@ pub enum TickTrigger {
     IdleTimeout,
 }
 
-/// Сегмент ответа модели после парсинга.
+/// Режим code block в ответе модели.
 ///
-/// Блок с `window == "tai"` обрабатывается через clap-парсер в ядре,
-/// а не отправляется как текст в окно. Остальные блоки — send-text
-/// (auto-launch если окно не существует).
+/// Без суффикса (по умолчанию) — text. С суффиксом — указанное действие.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockMode {
+    /// Текст в stdin окна (auto-launch если не существует)
+    Text,
+    /// Закрыть окно
+    Close,
+}
+
+impl std::str::FromStr for BlockMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "close" => Ok(Self::Close),
+            "text" => Ok(Self::Text),
+            _ => Err(format!("unknown block mode: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for BlockMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlockMode::Text => f.write_str("text"),
+            BlockMode::Close => f.write_str("close"),
+        }
+    }
+}
+
+/// Сегмент ответа модели после парсинга.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ParsedSegment {
-    /// Code block: ` ```title\ncontent\n``` `
-    Block { window: String, content: String },
+    /// Code block: ` ```title[:mode]\ncontent\n``` `
+    ///
+    /// По умолчанию mode=text (send to stdin, auto-launch).
+    /// mode=close — закрыть окно.
+    Block {
+        window: String,
+        mode: BlockMode,
+        content: String,
+    },
     /// Текст вне блоков — prose, сохраняется для контекста
     Prose(String),
 }

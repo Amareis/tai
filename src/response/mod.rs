@@ -1,9 +1,10 @@
-use crate::types::ParsedSegment;
+use crate::types::{BlockMode, ParsedSegment};
 
 /// Парсит ответ модели на сегменты.
 ///
 /// Формат:
-/// - ` ```title\ncontent\n``` ` — блок. Title — имя окна (или "tai" для команд управления).
+/// - ` ```title\ncontent\n``` ` — send text to window (auto-launch если не существует)
+/// - ` ```title:close\n``` ` — close window
 /// - Текст вне блоков — prose.
 ///
 /// Парсер heredoc-aware: внутри блока отслеживает `<<'DELIM'`, `<<"DELIM"`, `<<DELIM`
@@ -13,7 +14,8 @@ pub fn parse_response(text: &str) -> Vec<ParsedSegment> {
     let mut segments = Vec::new();
     let mut current_prose = String::new();
     let mut in_block = false;
-    let mut block_title: Option<String> = None;
+    let mut block_window: Option<String> = None;
+    let mut block_mode: Option<BlockMode> = None;
     let mut block_content = String::new();
     let mut heredoc_delimiter: Option<String> = None;
 
@@ -26,14 +28,15 @@ pub fn parse_response(text: &str) -> Vec<ParsedSegment> {
                     heredoc_delimiter = None;
                 }
             } else if line.starts_with("```") {
-                if let Some(title) = block_title.take()
-                && !title.is_empty()
-            {
-                segments.push(ParsedSegment::Block {
-                    window: title,
-                    content: block_content.trim_end().to_string(),
-                });
-            }
+                if let Some(window) = block_window.take()
+                    && !window.is_empty()
+                {
+                    segments.push(ParsedSegment::Block {
+                        window,
+                        mode: block_mode.unwrap_or(BlockMode::Text),
+                        content: block_content.trim_end().to_string(),
+                    });
+                }
                 block_content.clear();
                 heredoc_delimiter = None;
                 in_block = false;
@@ -50,8 +53,10 @@ pub fn parse_response(text: &str) -> Vec<ParsedSegment> {
                 segments.push(ParsedSegment::Prose(current_prose.trim().to_string()));
                 current_prose.clear();
             }
-            let title = line.trim_start_matches('`').trim().to_string();
-            block_title = Some(title);
+            let header = line.trim_start_matches('`').trim();
+            let (window, mode) = parse_block_header(header);
+            block_window = Some(window);
+            block_mode = Some(mode);
             in_block = true;
             heredoc_delimiter = None;
         } else {
@@ -61,11 +66,12 @@ pub fn parse_response(text: &str) -> Vec<ParsedSegment> {
     }
 
     if in_block {
-        if let Some(title) = block_title
-            && !title.is_empty()
+        if let Some(window) = block_window
+            && !window.is_empty()
         {
             segments.push(ParsedSegment::Block {
-                window: title,
+                window,
+                mode: block_mode.unwrap_or(BlockMode::Text),
                 content: block_content.trim_end().to_string(),
             });
         }
@@ -74,6 +80,22 @@ pub fn parse_response(text: &str) -> Vec<ParsedSegment> {
     }
 
     segments
+}
+
+/// Parse block header into (window, mode).
+///
+/// `build` → ("build", Text)
+/// `build:close` → ("build", Close)
+/// `build:text` → ("build", Text)
+fn parse_block_header(header: &str) -> (String, BlockMode) {
+    if let Some(pos) = header.rfind(':') {
+        let window = header[..pos].to_string();
+        let mode_str = &header[pos + 1..];
+        if let Ok(mode) = mode_str.parse::<BlockMode>() {
+            return (window, mode);
+        }
+    }
+    (header.to_string(), BlockMode::Text)
 }
 
 /// Extracts heredoc delimiter from a line.
@@ -109,12 +131,6 @@ fn extract_heredoc_delimiter(line: &str) -> Option<String> {
     }
 }
 
-/// Returns true if a block with the given window title is a TAI command block.
-#[must_use]
-pub fn is_tai_block(window: &str) -> bool {
-    window == "tai"
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,24 +154,22 @@ mod tests {
         assert!(matches!(&segments[0], ParsedSegment::Prose(_)));
         assert!(matches!(
             &segments[1],
-            ParsedSegment::Block { window, content }
-            if window == "build" && content == "cargo build"
+            ParsedSegment::Block { window, mode, content }
+            if window == "build" && *mode == BlockMode::Text && content == "cargo build"
         ));
         assert!(matches!(&segments[2], ParsedSegment::Prose(_)));
     }
 
     #[test]
-    fn test_parse_tai_command() {
-        let text = "```tai\nclose build\n```";
+    fn test_parse_close_mode() {
+        let text = "```build:close\n```";
         let segments = parse_response(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, content }
-            if window == "tai" && content == "close build"
+            ParsedSegment::Block { window, mode, content }
+            if window == "build" && *mode == BlockMode::Close && content.is_empty()
         ));
-        assert!(is_tai_block("tai"));
-        assert!(!is_tai_block("build"));
     }
 
     #[test]
@@ -172,7 +186,7 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, content }
+            ParsedSegment::Block { window, content, .. }
             if window == "build" && content.contains("``` not a closer")
         ));
     }
@@ -203,21 +217,29 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, content }
-            if window == "build" && content == "cargo test"
+            ParsedSegment::Block { window, mode, content }
+            if window == "build" && *mode == BlockMode::Text && content == "cargo test"
         ));
     }
 
     #[test]
-    fn test_parse_unclosed_block_becomes_prose() {
+    fn test_parse_unclosed_block() {
         let text = "```build\ncargo build";
         let segments = parse_response(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, content }
+            ParsedSegment::Block { window, content, .. }
             if window == "build" && content == "cargo build"
         ));
+    }
+
+    #[test]
+    fn test_parse_header_with_mode() {
+        assert_eq!(parse_block_header("build"), ("build".to_string(), BlockMode::Text));
+        assert_eq!(parse_block_header("build:close"), ("build".to_string(), BlockMode::Close));
+        assert_eq!(parse_block_header("build:text"), ("build".to_string(), BlockMode::Text));
+        assert_eq!(parse_block_header("my-window:close"), ("my-window".to_string(), BlockMode::Close));
     }
 
     #[test]

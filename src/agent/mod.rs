@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_openai::error::OpenAIError;
 use serde::{Deserialize, Serialize};
 use crate::prompt::Prompt;
-use crate::types::ParsedSegment;
+use crate::types::{BlockMode, ParsedSegment};
 
 mod test_agent;
 mod llm;
@@ -45,11 +45,12 @@ impl AgentResponse {
     }
 
     #[must_use]
-    pub fn block(window: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn block(window: impl Into<String>, mode: BlockMode, content: impl Into<String>) -> Self {
         Self {
             reasoning: String::new(),
             segments: vec![ParsedSegment::Block {
                 window: window.into(),
+                mode,
                 content: content.into(),
             }],
         }
