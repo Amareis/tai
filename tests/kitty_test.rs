@@ -32,7 +32,10 @@ async fn list_windows_returns_initial() {
     let CmdResponse::Windows(windows) = backend
         .execute(BackendCmd::List)
         .await
-        .expect("list should work") else { panic!("expected Windows response") };
+        .expect("list should work")
+    else {
+        panic!("expected Windows response")
+    };
     assert!(
         !windows.is_empty(),
         "kitty should have at least one initial window"
@@ -46,19 +49,21 @@ async fn launch_creates_window() {
     let CmdResponse::WindowCreated(window_id) = backend
         .execute(BackendCmd::Launch(LaunchCmd {
             title: Some("test-echo".to_string()),
-            command: vec![
-                "bash".to_string(),
-                "-c".to_string(),
-                "echo hello-world".to_string(),
-            ],
+            command: "echo hello-world".to_string(),
         }))
         .await
-        .expect("launch should succeed") else { panic!("expected WindowCreated response") };
+        .expect("launch should succeed")
+    else {
+        panic!("expected WindowCreated response")
+    };
 
     let CmdResponse::Windows(windows) = backend
         .execute(BackendCmd::List)
         .await
-        .expect("list should work") else { panic!("expected Windows response") };
+        .expect("list should work")
+    else {
+        panic!("expected Windows response")
+    };
     let found = windows.iter().any(|w| w.id == window_id);
     assert!(found, "launched window should appear in list");
 }
@@ -70,12 +75,13 @@ async fn get_text_returns_content() {
     let CmdResponse::WindowCreated(window_id) = backend
         .execute(BackendCmd::Launch(LaunchCmd {
             title: Some("test-text".to_string()),
-            command: vec![
-                "echo marker-42".to_string(),
-            ],
+            command: "echo marker-42".to_string(),
         }))
         .await
-        .expect("launch should succeed") else { panic!("expected WindowCreated") };
+        .expect("launch should succeed")
+    else {
+        panic!("expected WindowCreated")
+    };
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -84,7 +90,10 @@ async fn get_text_returns_content() {
             window_id: window_id.clone(),
         }))
         .await
-        .expect("get_text should work") else { panic!("expected Text response") };
+        .expect("get_text should work")
+    else {
+        panic!("expected Text response")
+    };
     assert!(
         text.contains("marker-42"),
         "get_text should contain output, got: {text:?}",
@@ -98,10 +107,13 @@ async fn send_text_to_window() {
     let CmdResponse::WindowCreated(window_id) = backend
         .execute(BackendCmd::Launch(LaunchCmd {
             title: Some("test-send".to_string()),
-            command: vec!["cat".to_string()],
+            command: "cat".to_string(),
         }))
         .await
-        .expect("launch should succeed") else { panic!("expected WindowCreated") };
+        .expect("launch should succeed")
+    else {
+        panic!("expected WindowCreated")
+    };
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     backend
@@ -119,7 +131,10 @@ async fn send_text_to_window() {
             window_id: window_id.clone(),
         }))
         .await
-        .expect("get_text should work") else { panic!("expected Text") };
+        .expect("get_text should work")
+    else {
+        panic!("expected Text")
+    };
     assert!(
         text.contains("hello-from-tai"),
         "sent text should appear in window, got: {text:?}",
@@ -133,15 +148,21 @@ async fn close_window() {
     let CmdResponse::WindowCreated(window_id) = backend
         .execute(BackendCmd::Launch(LaunchCmd {
             title: Some("test-close".to_string()),
-            command: vec!["sleep".to_string(), "60".to_string()],
+            command: "sleep 60".to_string(),
         }))
         .await
-        .expect("launch should succeed") else { panic!("expected WindowCreated") };
+        .expect("launch should succeed")
+    else {
+        panic!("expected WindowCreated")
+    };
 
     let CmdResponse::Windows(before) = backend
         .execute(BackendCmd::List)
         .await
-        .expect("list should work") else { panic!("expected Windows") };
+        .expect("list should work")
+    else {
+        panic!("expected Windows")
+    };
     let had_window = before.iter().any(|w| w.id == window_id);
     assert!(had_window);
 
@@ -157,7 +178,10 @@ async fn close_window() {
     let CmdResponse::Windows(after) = backend
         .execute(BackendCmd::List)
         .await
-        .expect("list should work") else { panic!("expected Windows") };
+        .expect("list should work")
+    else {
+        panic!("expected Windows")
+    };
     let still_has = after.iter().any(|w| w.id == window_id);
     assert!(!still_has, "closed window should not appear in list");
 }
@@ -169,10 +193,13 @@ async fn set_title() {
     let CmdResponse::WindowCreated(window_id) = backend
         .execute(BackendCmd::Launch(LaunchCmd {
             title: Some("original-title".to_string()),
-            command: vec!["sleep".to_string(), "60".to_string()],
+            command: "sleep 60".to_string(),
         }))
         .await
-        .expect("launch should succeed") else { panic!("expected WindowCreated") };
+        .expect("launch should succeed")
+    else {
+        panic!("expected WindowCreated")
+    };
 
     backend
         .execute(BackendCmd::Title(tai::backend::SetTitleCmd {
@@ -185,7 +212,10 @@ async fn set_title() {
     let CmdResponse::Windows(windows) = backend
         .execute(BackendCmd::List)
         .await
-        .expect("list should work") else { panic!("expected Windows") };
+        .expect("list should work")
+    else {
+        panic!("expected Windows")
+    };
     let found = windows
         .iter()
         .find(|w| w.id == window_id)
@@ -202,23 +232,31 @@ async fn watcher_detects_exit() {
     let CmdResponse::WindowCreated(window_id) = backend
         .execute(BackendCmd::Launch(LaunchCmd {
             title: Some("test-watch".to_string()),
-            command: vec![
-                "bash".to_string(),
-                "-c".to_string(),
-                "echo quick-exit".to_string(),
-            ],
+            command: "echo quick-exit".to_string(),
         }))
         .await
-        .expect("launch should succeed") else { panic!("expected WindowCreated") };
+        .expect("launch should succeed")
+    else {
+        panic!("expected WindowCreated")
+    };
 
     let mut watcher = Watcher::new();
-    watcher.track(window_id.clone(), true);
+    watcher.track(
+        window_id.clone(),
+        "test".to_string(),
+        "echo test".to_string(),
+    );
 
     let mut detected = false;
     for _ in 0..30 {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let exited = watcher.poll_exited(&backend).await.expect("poll should work");
-        if let Some(Terminal {id, ..}) = exited.first() && *id == window_id {
+        let exited = watcher
+            .poll_exited(&backend)
+            .await
+            .expect("poll should work");
+        if let Some(Terminal { id, .. }) = exited.first()
+            && *id == window_id
+        {
             detected = true;
         }
         if detected {

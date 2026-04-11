@@ -5,8 +5,9 @@ use tracing::info;
 use crate::backend::{BackendCmd, BackendError, CmdResponse, Terminal, TerminalBackend, WindowId};
 
 struct TrackedWindow {
-    #[allow(dead_code)]
     id: WindowId,
+    title: String,
+    command: String,
     was_active: bool,
 }
 
@@ -28,15 +29,39 @@ impl Watcher {
         }
     }
 
-    pub fn track(&mut self, id: WindowId, is_active: bool) {
-        info!("watcher: tracking {id}");
+    pub fn track(&mut self, id: WindowId, title: String, command: String) {
+        info!("watcher: tracking {id} title={title}");
         self.tracked.insert(
             id.clone(),
             TrackedWindow {
                 id,
-                was_active: is_active,
+                title,
+                command,
+                was_active: true,
             },
         );
+    }
+
+    #[must_use]
+    pub fn watch_entries(&self) -> Vec<(WindowId, String, String)> {
+        self.tracked
+            .values()
+            .filter(|tw| !tw.command.is_empty())
+            .map(|tw| (tw.id.clone(), tw.title.clone(), tw.command.clone()))
+            .collect()
+    }
+
+    pub fn update_id(&mut self, old_id: &WindowId, new_id: WindowId) {
+        if let Some(mut tw) = self.tracked.remove(old_id) {
+            info!("watcher: update {old_id} -> {new_id}");
+            tw.id = new_id.clone();
+            tw.was_active = true;
+            self.tracked.insert(new_id, tw);
+        }
+    }
+
+    pub fn remove_by_title(&mut self, title: &str) {
+        self.tracked.retain(|_, tw| tw.title != title);
     }
 
     pub async fn poll_exited(
@@ -71,15 +96,6 @@ impl Watcher {
                 tracked.was_active = false;
             }
         }
-
-        //TODO close exited windows?
-        // let _ = back
-        //     .execute(BackendCmd::Close(CloseCmd {
-        //         window: backend_id.clone(),
-        //     }))
-        //     .await;
-        //
-        // self.tracked.remove(&backend_id);
 
         Ok(exited)
     }
@@ -209,7 +225,7 @@ mod tests {
         backend.add_window(wid.clone(), false, "running...");
 
         let mut watcher = Watcher::new();
-        watcher.track(wid.clone(), true);
+        watcher.track(wid.clone(), "build".to_string(), "cargo build".to_string());
 
         let exited = watcher.poll_exited(&backend).await.unwrap();
         assert_eq!(exited.len(), 0);
@@ -222,15 +238,13 @@ mod tests {
         backend.add_window_with_exit(wid.clone(), false, "hello world", 0);
 
         let mut watcher = Watcher::new();
-        watcher.track(wid.clone(), true);
+        watcher.track(wid.clone(), "build".to_string(), "cargo build".to_string());
 
-        // first poll: add to session
         let exited = watcher.poll_exited(&backend).await.unwrap();
         assert_eq!(exited.len(), 0);
 
         backend.set_at_prompt(&wid, true);
 
-        // second poll: freeze
         let exited = watcher.poll_exited(&backend).await.unwrap();
         assert_eq!(exited.len(), 1);
         assert_eq!(exited[0].id, wid);
@@ -250,14 +264,52 @@ mod tests {
         backend.add_window(wid, false, "running...");
 
         let mut watcher = Watcher::new();
-        watcher.track(WindowId("w1".to_string()), true);
+        watcher.track(WindowId("w1".to_string()), "build".to_string(), "cargo build".to_string());
 
-        // first poll: add
         let exited = watcher.poll_exited(&backend).await.unwrap();
         assert!(exited.is_empty());
 
-        // second poll: still running (not at prompt)
         let exited = watcher.poll_exited(&backend).await.unwrap();
         assert!(exited.is_empty());
+    }
+
+    #[test]
+    fn test_watch_entries() {
+        let mut watcher = Watcher::new();
+        assert!(watcher.watch_entries().is_empty());
+
+        watcher.track(WindowId::new("w1"), "task".to_string(), "cat TASK.md".to_string());
+        watcher.track(WindowId::new("w2"), "tree".to_string(), "tree --gitignore".to_string());
+
+        let entries = watcher.watch_entries();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_update_id() {
+        let mut watcher = Watcher::new();
+        let old_id = WindowId::new("w1");
+        watcher.track(old_id.clone(), "task".to_string(), "cat TASK.md".to_string());
+
+        let new_id = WindowId::new("w1-new");
+        watcher.update_id(&old_id, new_id.clone());
+
+        let entries = watcher.watch_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, new_id);
+        assert_eq!(entries[0].1, "task");
+    }
+
+    #[test]
+    fn test_remove_by_title() {
+        let mut watcher = Watcher::new();
+        watcher.track(WindowId::new("w1"), "task".to_string(), "cat TASK.md".to_string());
+        watcher.track(WindowId::new("w2"), "tree".to_string(), "tree --gitignore".to_string());
+
+        watcher.remove_by_title("task");
+
+        let entries = watcher.watch_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1, "tree");
     }
 }

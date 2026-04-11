@@ -1,3 +1,4 @@
+use std::env;
 use async_trait::async_trait;
 use kitty_rc::{
     CloseWindowCommand, GetTextCommand, Kitty, KittyBuilder, LaunchCommand, LsCommand,
@@ -158,7 +159,7 @@ impl TerminalBackend for KittyBackend {
 
         if !cmd.command.is_empty() {
             args.push("-c".to_string());
-            args.push(shell_words::join(&cmd.command));
+            args.push(cmd.command.clone());
         }
 
         let msg = LaunchCommand::new()

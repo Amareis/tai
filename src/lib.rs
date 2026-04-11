@@ -4,7 +4,6 @@ pub mod config;
 pub mod core;
 pub mod prompt;
 pub mod response;
-pub mod routing;
 pub mod types;
 
 use crate::agent::{Agent, LlmAgent};

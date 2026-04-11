@@ -1,11 +1,11 @@
-use std::fmt::Write;
-use std::time::Duration;
-use crate::agent::Agent;
-use crate::agent::AgentResponse;
+use crate::agent::{Agent, AgentResponse};
 use crate::backend::watch::Watcher;
-use crate::backend::{BackendCmd, CloseCmd, CmdResponse, LaunchCmd, SetTitleCmd, TerminalBackend, WindowId};
+use crate::backend::{
+    BackendCmd, CloseCmd, CmdResponse, GetTextCmd, LaunchCmd, TerminalBackend, WindowId,
+};
 use crate::types::{BlockMode, ParsedSegment, TickTrigger};
 use rustyline_async::ReadlineError;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::select;
@@ -14,9 +14,11 @@ use tracing::info;
 pub mod utils;
 
 use crate::prompt::Prompt;
+use crate::response::parse_response;
 use utils::sleep_some_or_forever;
 
-const TRIGGER_TIMEOUT: Duration = Duration::from_secs(5);
+const TRIGGER_TIMEOUT: Duration = Duration::from_secs(30);
+const CMD_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -37,6 +39,15 @@ pub enum CoreError {
 
     #[error("prompt error: {0}")]
     Prompt(#[from] crate::prompt::PromptError),
+}
+
+struct ExecutedBlock {
+    title: String,
+    window_id: Option<WindowId>,
+    #[allow(dead_code)]
+    mode: BlockMode,
+    /// Pre-computed result string (for Write and Close)
+    result: Option<String>,
 }
 
 pub struct Server {
@@ -60,19 +71,39 @@ impl Server {
     }
 
     pub async fn run(&mut self) -> Result<(), CoreError> {
-        // 1. Создаем асинхронный stdin
         let stdin = tokio::io::stdin();
-
-        // 2. Обязательно оборачиваем в BufReader для построчного чтения
         let reader = BufReader::new(stdin);
         let mut lines = reader.lines();
 
-        let _ = self.back.execute(BackendCmd::Title(SetTitleCmd{
-            window_id: WindowId("1".to_string()),
-            title: vec!["task".to_string()]
-        })).await;
-        self.run_cmd("task", "watch -t cat TASK.md").await;
-        self.run_cmd("tree", "watch -t tree --gitignore").await;
+        let segments = parse_response(
+            r"Current task
+```task
+cat TASK.md
+```
+Current dir and contents
+```tree
+pwd && tree --gitignore
+```
+",
+        );
+        let executed = self.execute_blocks(&segments).await;
+
+        let feedback = self.collect_feedback(executed).await;
+
+        self.last_tick = Some((
+            AgentResponse {
+                reasoning: String::new(),
+                segments,
+            },
+            feedback,
+        ));
+
+        let _ = self
+            .back
+            .execute(BackendCmd::Close(CloseCmd {
+                window_id: WindowId("1".to_string()),
+            }))
+            .await;
 
         loop {
             if self.debug {
@@ -84,6 +115,8 @@ impl Server {
     }
 
     pub async fn tick(&mut self) -> Result<(), CoreError> {
+        self.refresh_watch_windows().await?;
+
         let (prev_response, prev_feedback) = match self.last_tick.take() {
             Some((resp, fb)) => (Some(resp), Some(fb)),
             None => (None, None),
@@ -93,9 +126,9 @@ impl Server {
 
         let response = self.agent.step(&prompt).await?;
 
-        let results = self.execute_blocks(&response.segments).await;
+        let executed = self.execute_blocks(&response.segments).await;
 
-        let feedback = format_results(&response.segments, &results);
+        let feedback = self.collect_feedback(executed).await;
 
         self.last_tick = Some((response.clone(), feedback));
 
@@ -119,50 +152,204 @@ impl Server {
         }
     }
 
-    async fn run_cmd(&mut self, window: &str, content: &str) {
-        let seg = vec![ParsedSegment::Block {
-            window: window.to_string(),
-            mode: BlockMode::Text,
-            content: content.to_string(),
-        }];
-        let _ = self.execute_blocks(&seg).await;
-    }
-
-    async fn execute_blocks(&mut self, segments: &[ParsedSegment]) -> Vec<BlockResult> {
-        let mut results = Vec::new();
+    async fn execute_blocks(&mut self, segments: &[ParsedSegment]) -> Vec<ExecutedBlock> {
+        let mut executed = Vec::new();
 
         for segment in segments {
-            if let ParsedSegment::Block { window, mode, content } = segment {
+            if let ParsedSegment::Block {
+                window,
+                mode,
+                content,
+            } = segment
+            {
                 let result = self.execute_block(window, mode, content).await;
-                results.push(result);
+                executed.push(result);
             }
         }
 
-        results
+        executed
     }
 
     async fn execute_block(
         &mut self,
-        window: &str,
+        title: &str,
         mode: &BlockMode,
         content: &str,
-    ) -> BlockResult {
+    ) -> ExecutedBlock {
         match mode {
-            BlockMode::Close => self.execute_close(window).await,
-            BlockMode::Text => self.execute_window_block(window, content).await,
-            BlockMode::Write => Self::execute_file_write(window, content),
+            BlockMode::Close => {
+                let _window_id = self.execute_close(title).await;
+                ExecutedBlock {
+                    title: title.to_string(),
+                    window_id: None,
+                    mode: *mode,
+                    result: Some(format!("[{title}] closed")),
+                }
+            }
+            BlockMode::Text => {
+                let window_id = self.execute_one_shot(title, content).await;
+                ExecutedBlock {
+                    title: title.to_string(),
+                    window_id: Some(window_id),
+                    mode: *mode,
+                    result: None,
+                }
+            }
+            BlockMode::Write => {
+                let result = Self::execute_file_write(title, content);
+                ExecutedBlock {
+                    title: title.to_string(),
+                    window_id: None,
+                    mode: *mode,
+                    result: Some(result),
+                }
+            }
         }
     }
 
-    async fn execute_close(&mut self, title: &str) -> BlockResult {
-        if let Some(id) = self.get_id_for_title(title).await {
-            let cmd = BackendCmd::Close(CloseCmd {
-                window_id: id,
-            });
-            self.execute_backend_cmd(cmd, title).await
-        } else {
-            BlockResult::Error(title.to_string(), format!("window '{title}' not found"))
+    async fn execute_one_shot(&mut self, title: &str, content: &str) -> WindowId {
+        let launch_cmd = LaunchCmd {
+            title: Some(title.to_string()),
+            command: content.to_string(),
+        };
+
+        let id = match self.back.cmd_launch(&launch_cmd).await {
+            Ok(id) => {
+                self.watcher
+                    .track(id.clone(), title.to_string(), content.to_string());
+                id
+            }
+            Err(e) => {
+                info!("launch error for '{title}': {e}");
+                return WindowId::new("error");
+            }
+        };
+
+        // Wait for command to finish (at_prompt) with timeout
+        self.wait_for_window(&id, CMD_WAIT_TIMEOUT).await;
+
+        id
+    }
+
+    /// Poll until window reaches `at_prompt` or timeout.
+    async fn wait_for_window(&mut self, id: &WindowId, timeout: Duration) {
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                info!("wait_for_window: timeout for {id}");
+                return;
+            }
+
+            if let Ok(CmdResponse::Windows(windows)) = self.back.execute(BackendCmd::List).await
+                && let Some(w) = windows.iter().find(|w| &w.id == id)
+                && w.is_at_prompt
+            {
+                return;
+            }
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
+    }
+
+    /// After executing blocks, read window output for one-shot commands.
+    async fn collect_feedback(&mut self, executed: Vec<ExecutedBlock>) -> String {
+        let mut feedback = String::new();
+
+        for block in &executed {
+            let output = if let Some(ref result) = block.result {
+                result.clone()
+            } else if let Some(ref id) = block.window_id {
+                self.read_window_output(id, &block.title).await
+            } else {
+                format!("[{}]", block.title)
+            };
+
+            if !feedback.is_empty() {
+                feedback.push('\n');
+            }
+            feedback.push_str(&output);
+        }
+
+        feedback
+    }
+
+    /// Read window content + exit code for feedback.
+    async fn read_window_output(&mut self, id: &WindowId, title: &str) -> String {
+        let text = match self
+            .back
+            .execute(BackendCmd::Get(GetTextCmd {
+                window_id: id.clone(),
+            }))
+            .await
+        {
+            Ok(CmdResponse::Text(t)) => t,
+            _ => String::new(),
+        };
+
+        let exit_code = match self.back.execute(BackendCmd::List).await {
+            Ok(CmdResponse::Windows(windows)) => windows
+                .iter()
+                .find(|w| &w.id == id)
+                .and_then(|w| w.last_cmd_exit_status),
+            _ => None,
+        };
+
+        let exit_info = match exit_code {
+            Some(code) => format!("exit {code}"),
+            None => String::new(),
+        };
+
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            format!("[{title}] {exit_info}")
+        } else {
+            format!("[{title}] {exit_info}\n{trimmed}")
+        }
+    }
+
+    async fn execute_close(&mut self, title: &str) -> Option<WindowId> {
+        if let Some(id) = self.get_id_for_title(title).await {
+            let _ = self
+                .back
+                .execute(BackendCmd::Close(CloseCmd {
+                    window_id: id.clone(),
+                }))
+                .await;
+            self.watcher.remove_by_title(title);
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    async fn refresh_watch_windows(&mut self) -> Result<(), CoreError> {
+        let entries = self.watcher.watch_entries();
+        for (old_id, title, command) in entries {
+            let _ = self
+                .back
+                .execute(BackendCmd::Close(CloseCmd {
+                    window_id: old_id.clone(),
+                }))
+                .await;
+
+            let launch_cmd = LaunchCmd {
+                title: Some(title.clone()),
+                command: command.clone(),
+            };
+
+            let new_id = match self.back.cmd_launch(&launch_cmd).await {
+                Ok(id) => id,
+                Err(e) => {
+                    info!("refresh: launch error for '{title}': {e}");
+                    continue;
+                }
+            };
+
+            self.wait_for_window(&new_id, CMD_WAIT_TIMEOUT).await;
+
+            self.watcher.update_id(&old_id, new_id);
+        }
+        Ok(())
     }
 
     async fn get_id_for_title(&mut self, title: &str) -> Option<WindowId> {
@@ -175,124 +362,20 @@ impl Server {
         }
     }
 
-    async fn execute_window_block(&mut self, title: &str, content: &str) -> BlockResult {
-        let id = if let Some(id) = self.get_id_for_title(title).await {
-            id
-        } else {
-            let launch_cmd = BackendCmd::Launch(LaunchCmd {
-                title: Some(title.to_string()),
-                command: vec!["zsh".to_string()],
-            });
-            match self.back.execute(launch_cmd).await {
-                Ok(CmdResponse::WindowCreated(id)) => {
-                    self.watcher.track(id.clone(), true);
-                    id
-                }
-                Ok(CmdResponse::Error(e)) => {
-                    return BlockResult::Error(title.to_string(), format!("launch failed: {e}"));
-                }
-                Ok(_) => {
-                    return BlockResult::Error(title.to_string(), "unexpected response from launch".to_string());
-                }
-                Err(e) => {
-                    return BlockResult::Error(title.to_string(), format!("launch failed: {e}"));
-                }
-            }
-        };
-
-        let text_to_send = format!("{content}\n");
-        let cmd = BackendCmd::Send(crate::backend::SendTextCmd {
-            window: id,
-            text: vec![text_to_send],
-        });
-        self.execute_backend_cmd(cmd, title).await
-    }
-
-    fn execute_file_write(path: &str, content: &str) -> BlockResult {
+    fn execute_file_write(path: &str, content: &str) -> String {
         let file_path = std::path::Path::new(path);
         if let Some(parent) = file_path.parent()
             && !parent.as_os_str().is_empty()
             && let Err(e) = std::fs::create_dir_all(parent)
         {
-            return BlockResult::Error(path.to_string(), format!("mkdir failed: {e}"));
+            return format!("[{path}] Error: mkdir failed: {e}");
         }
         match std::fs::write(path, content) {
             Ok(()) => {
                 let bytes = content.len();
-                BlockResult::Ok(format!("{path} ({bytes} bytes written)"))
+                format!("[{path}] {bytes} bytes written")
             }
-            Err(e) => BlockResult::Error(path.to_string(), format!("write failed: {e}")),
+            Err(e) => format!("[{path}] Error: write failed: {e}"),
         }
     }
-
-    async fn execute_backend_cmd(&mut self, cmd: BackendCmd, target: &str) -> BlockResult {
-        match self.back.execute(cmd).await {
-            Ok(CmdResponse::WindowCreated(id)) => {
-                self.watcher.track(id.clone(), true);
-                BlockResult::Created(id)
-            }
-            Ok(CmdResponse::Text(text)) => BlockResult::Text(target.to_string(), text),
-            Ok(CmdResponse::Windows(windows)) => BlockResult::List(
-                target.to_string(),
-                windows
-                    .iter()
-                    .map(|w| {
-                        format!(
-                            "{} | {} | pid {} | prompt: {}",
-                            w.id, w.title, w.pid, w.is_at_prompt
-                        )
-                    })
-                    .collect(),
-            ),
-            Ok(CmdResponse::Ok) => BlockResult::Ok(target.to_string()),
-            Ok(CmdResponse::Error(e)) => BlockResult::Error(target.to_string(), e),
-            Err(e) => BlockResult::Error(target.to_string(), e.to_string()),
-        }
-    }
-}
-
-enum BlockResult {
-    Created(WindowId),
-    Text(String, String),
-    List(String, Vec<String>),
-    Ok(String),
-    Error(String, String),
-}
-
-fn format_results(segments: &[ParsedSegment], results: &[BlockResult]) -> String {
-    let mut output = String::new();
-
-    for segment in segments {
-        if let ParsedSegment::Prose(text) = segment {
-            if !output.is_empty() {
-                output.push('\n');
-            }
-            output.push_str(text);
-        }
-    }
-
-    for result in results {
-        if !output.is_empty() {
-            output.push('\n');
-        }
-        match result {
-            BlockResult::Created(id) => {
-                let _ = write!(output, "[created], id = {id}");
-            }
-            BlockResult::Text(target, text) => {
-                let _ = write!(output, "[{target}] {text}");
-            }
-            BlockResult::List(target, list) => {
-                let _ = write!(output, "[{target}]\n{}", list.join("\n"));
-            }
-            BlockResult::Ok(target) => {
-                let _ = write!(output, "[{target}] OK");
-            }
-            BlockResult::Error(target, e) => {
-                let _ = write!(output, "[{target}] Error: {e}");
-            }
-        }
-    }
-
-    output
 }

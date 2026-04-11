@@ -2,7 +2,6 @@ pub mod kitty;
 pub mod watch;
 
 use async_trait::async_trait;
-use clap::{Parser, Subcommand};
 use std::fmt;
 use serde::{Deserialize, Serialize};
 
@@ -52,24 +51,21 @@ pub struct Terminal {
 }
 
 /// Команда для запуска нового терминального окна.
-#[derive(Debug, Clone, PartialEq, Parser)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LaunchCmd {
     /// Заголовок окна
-    #[arg(short, long)]
     pub title: Option<String>,
     /// Команда для запуска (argv), запускается через "zsh -c".
     /// Если команды нет - запускается просто zsh.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    pub command: Vec<String>,
+    pub command: String,
 }
 
 /// Команда отправки текста в stdin окна.
-#[derive(Debug, Clone, PartialEq, Parser)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SendTextCmd {
     /// ID окна
     pub window: WindowId,
     /// Текст для отправки (аргументы объединяются через пробел)
-    #[arg(trailing_var_arg = true)]
     pub text: Vec<String>,
 }
 
@@ -82,41 +78,39 @@ impl SendTextCmd {
 }
 
 /// Команда отправки клавиш в окно.
-#[derive(Debug, Clone, PartialEq, Parser)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SendKeysCmd {
     /// ID окна
     pub window: WindowId,
     /// Клавиши для отправки
-    #[arg(trailing_var_arg = true)]
     pub keys: Vec<String>,
 }
 
 /// Команда получения содержимого окна.
-#[derive(Debug, Clone, PartialEq, Parser)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GetTextCmd {
     /// ID окна
     pub window_id: WindowId,
 }
 
 /// Команда закрытия окна.
-#[derive(Debug, Clone, PartialEq, Parser)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CloseCmd {
     /// ID окна
     pub window_id: WindowId,
 }
 
 /// Команда установки заголовка окна.
-#[derive(Debug, Clone, PartialEq, Parser)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SetTitleCmd {
     /// ID окна
     pub window_id: WindowId,
     /// Новый заголовок
-    #[arg(trailing_var_arg = true)]
     pub title: Vec<String>,
 }
 
 /// Команды для управления терминалами.
-#[derive(Debug, Clone, PartialEq, Subcommand)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BackendCmd {
     /// Запустить новое терминальное окно
     Launch(LaunchCmd),
