@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::time::Duration;
 use tokio::net::UnixListener;
 use tracing::info;
 use crate::core::CoreError;
@@ -28,11 +27,4 @@ pub async fn bind(socket_path: &PathBuf) -> Result<(UnixListener, RmFileOnDrop),
     info!("listening on {}", socket_path.display());
 
     Ok((listener, RmFileOnDrop::new(socket_path.clone())))
-}
-pub async fn sleep_some_or_forever(timeout: Option<Duration>) {
-    if let Some(timeout) = timeout {
-        tokio::time::sleep(timeout).await;
-    } else {
-        std::future::pending::<()>().await;
-    }
 }

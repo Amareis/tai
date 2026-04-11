@@ -1,20 +1,4 @@
-use crate::backend::Terminal;
 use serde::{Deserialize, Serialize};
-
-/// Триггер нового тика (цикла ядра).
-///
-/// Тик — один проход assemble → invoke → parse → execute → wait.
-/// Триггер определяет, что запускает новый тик.
-/// TODO: Phase 6 — использовать в kernel/mod.rs
-#[derive(Debug, Clone, PartialEq)]
-pub enum TickTrigger {
-    /// Терминальное окно завершилось (`at_prompt` == true)
-    WindowsExited(Vec<Terminal>),
-    /// Пользователь написал сообщение в TUI chat
-    UserMessage,
-    /// Прошёл idle-timeout без событий
-    IdleTimeout,
-}
 
 /// Режим code block в ответе модели.
 ///

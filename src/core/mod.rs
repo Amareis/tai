@@ -3,22 +3,20 @@ use crate::backend::watch::Watcher;
 use crate::backend::{
     BackendCmd, CloseCmd, CmdResponse, GetTextCmd, LaunchCmd, SendTextCmd, TerminalBackend, WindowId,
 };
-use crate::types::{BlockMode, ParsedSegment, TickTrigger};
-use rustyline_async::ReadlineError;
+use crate::types::{BlockMode, ParsedSegment};
+use std::collections::HashSet;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::select;
-use tracing::{info, warn, debug, trace};
+use tracing::{debug, info, trace, warn};
 
 pub mod utils;
 
 use crate::prompt::Prompt;
 use crate::response::parse_response;
-use utils::sleep_some_or_forever;
 
-const TRIGGER_TIMEOUT: Duration = Duration::from_secs(1);
 const CMD_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -29,7 +27,7 @@ pub enum CoreError {
     ConnectionClosed,
 
     #[error("readline error: {0}")]
-    Readline(#[from] ReadlineError),
+    Readline(#[from] rustyline_async::ReadlineError),
 
     #[error("agent error: {0}")]
     Agent(#[from] crate::agent::AgentError),
@@ -70,7 +68,7 @@ impl Server {
     }
 
     pub async fn run(&mut self) -> Result<(), CoreError> {
-        info!("run: starting server main loop");
+        info!("run: starting server");
         let stdin = tokio::io::stdin();
         let reader = BufReader::new(stdin);
         let mut lines = reader.lines();
@@ -85,7 +83,7 @@ Current dir and contents
 ```tree
 pwd && tree --gitignore
 ```
-",
+"
         );
         let executed = self.execute_blocks(&segments).await;
 
@@ -112,18 +110,20 @@ pwd && tree --gitignore
             if self.debug {
                 let _ = lines.next_line().await;
             }
-            info!("run: waiting for trigger (timeout {:?})", TRIGGER_TIMEOUT);
-            let _events = self.wait_trigger(Some(TRIGGER_TIMEOUT)).await?;
-            info!("run: trigger fired, starting tick");
             self.tick().await?;
-            info!("run: tick completed");
+
+            if self.watcher.watch_entries().is_empty() {
+                info!("run: no tracked windows left, exiting");
+                break;
+            }
         }
+
+        Ok(())
     }
 
     pub async fn tick(&mut self) -> Result<(), CoreError> {
-        info!("tick: rerunning watch windows");
+        info!("tick: start");
         self.rerun_watch_windows().await?;
-        info!("tick: watch windows rerun done, building prompt");
 
         let (prev_response, prev_feedback) = match self.last_tick.take() {
             Some((resp, fb)) => (Some(resp), Some(fb)),
@@ -148,19 +148,9 @@ pwd && tree --gitignore
         Ok(())
     }
 
-    pub async fn wait_trigger(
-        &mut self,
-        timeout: Option<Duration>,
-    ) -> Result<TickTrigger, CoreError> {
-        select! {
-            () = sleep_some_or_forever(timeout) => {
-                Ok(TickTrigger::IdleTimeout)
-            },
-        }
-    }
-
     async fn execute_blocks(&mut self, segments: &[ParsedSegment]) -> Vec<ExecutedBlock> {
         let mut executed = Vec::new();
+        let mut pending_ids: Vec<WindowId> = Vec::new();
 
         for segment in segments {
             if let ParsedSegment::Block {
@@ -169,15 +159,23 @@ pwd && tree --gitignore
                 content,
             } = segment
             {
-                let result = self.execute_block(window, mode, content).await;
-                executed.push(result);
+                let block = self.execute_block_launch(window, mode, content).await;
+                if let Some(ref id) = block.window_id {
+                    pending_ids.push(id.clone());
+                }
+                executed.push(block);
             }
+        }
+
+        if !pending_ids.is_empty() {
+            info!("execute_blocks: batch-waiting for {} windows", pending_ids.len());
+            self.wait_for_windows(&pending_ids, CMD_WAIT_TIMEOUT).await;
         }
 
         executed
     }
 
-    async fn execute_block(
+    async fn execute_block_launch(
         &mut self,
         title: &str,
         mode: &BlockMode,
@@ -185,23 +183,28 @@ pwd && tree --gitignore
     ) -> ExecutedBlock {
         match mode {
             BlockMode::Close => {
-                let _window_id = self.execute_close(title).await;
+                let result = self.execute_close(title).await;
                 ExecutedBlock {
                     title: title.to_string(),
                     window_id: None,
                     mode: *mode,
-                    result: Some(format!("[{title}] closed")),
+                    result: Some(result),
                 }
             }
-            BlockMode::Text => {
-                let window_id = self.execute_text(title, content).await;
-                ExecutedBlock {
+            BlockMode::Text => match self.launch_and_send(title, content).await {
+                Ok(id) => ExecutedBlock {
                     title: title.to_string(),
-                    window_id: Some(window_id),
+                    window_id: Some(id),
                     mode: *mode,
                     result: None,
-                }
-            }
+                },
+                Err(e) => ExecutedBlock {
+                    title: title.to_string(),
+                    window_id: None,
+                    mode: *mode,
+                    result: Some(format!("[{title}] Error: {e}")),
+                },
+            },
             BlockMode::Write => {
                 let result = Self::execute_file_write(title, content);
                 ExecutedBlock {
@@ -214,8 +217,8 @@ pwd && tree --gitignore
         }
     }
 
-    async fn execute_text(&mut self, title: &str, content: &str) -> WindowId {
-        info!("execute_text: launching shell for '{title}'");
+    async fn launch_and_send(&mut self, title: &str, content: &str) -> Result<WindowId, String> {
+        info!("launch_and_send: '{title}'");
         let launch_cmd = LaunchCmd {
             title: Some(title.to_string()),
             command: String::new(),
@@ -223,43 +226,73 @@ pwd && tree --gitignore
 
         let id = match self.back.cmd_launch(&launch_cmd).await {
             Ok(id) => {
-                info!("execute_text: shell launched id={id} for '{title}'");
+                info!("launch_and_send: shell launched id={id} for '{title}'");
                 id
             }
             Err(e) => {
-                warn!("execute_text: launch error for '{title}': {e}");
-                return WindowId::new("error");
+                return Err(format!("launch failed: {e}"));
             }
         };
 
-        debug!("execute_text: sending command to '{title}' (id={id})");
         let send_cmd = SendTextCmd {
             window: id.clone(),
             text: vec![format!("{content}\n")],
         };
         if let Err(e) = self.back.execute(BackendCmd::Send(send_cmd)).await {
-            warn!("execute_text: send-text error for '{title}': {e}");
+            return Err(format!("send-text failed: {e}"));
         }
 
         self.watcher
             .track(id.clone(), title.to_string(), content.to_string());
 
-        info!("execute_text: waiting for '{title}' (id={id})");
-        self.wait_for_window(&id, CMD_WAIT_TIMEOUT).await;
-        info!("execute_text: done '{title}' (id={id})");
+        Ok(id)
+    }
 
-        id
+    async fn wait_for_windows(&mut self, ids: &[WindowId], timeout: Duration) {
+        trace!("wait_for_windows: waiting for {} windows", ids.len());
+        let mut pending: HashSet<WindowId> = ids.iter().cloned().collect();
+        let start = std::time::Instant::now();
+        let mut poll_count = 0u32;
+
+        while !pending.is_empty() {
+            if start.elapsed() > timeout {
+                warn!(
+                    "wait_for_windows: timeout after {poll_count} polls, {} still pending",
+                    pending.len()
+                );
+                break;
+            }
+            poll_count += 1;
+
+            if let Ok(CmdResponse::Windows(windows)) = self.back.execute(BackendCmd::List).await {
+                for w in &windows {
+                    if w.is_at_prompt {
+                        pending.remove(&w.id);
+                    }
+                }
+            }
+
+            if !pending.is_empty() {
+                tokio::time::sleep(POLL_INTERVAL).await;
+            }
+        }
+
+        info!(
+            "wait_for_windows: done ({poll_count} polls, {} pending)",
+            pending.len()
+        );
     }
 
     async fn rerun_watch_windows(&mut self) -> Result<(), CoreError> {
         let entries = self.watcher.watch_entries();
-        let count = entries.len();
-        if count == 0 {
+        if entries.is_empty() {
             debug!("rerun_watch_windows: no tracked windows");
             return Ok(());
         }
-        info!("rerun_watch_windows: rerunning {count} windows");
-        for (id, title, command) in entries {
+        let count = entries.len();
+        info!("rerun_watch_windows: {count} windows");
+
+        for (id, title, command) in &entries {
             debug!("rerun_watch_windows: sending to '{title}' (id={id})");
             let send_cmd = SendTextCmd {
                 window: id.clone(),
@@ -267,36 +300,13 @@ pwd && tree --gitignore
             };
             if let Err(e) = self.back.execute(BackendCmd::Send(send_cmd)).await {
                 warn!("rerun_watch_windows: send-text error for '{title}' (id={id}): {e}");
-                continue;
             }
-
-            self.wait_for_window(&id, CMD_WAIT_TIMEOUT).await;
         }
-        info!("rerun_watch_windows: done");
+
+        let ids: Vec<WindowId> = entries.iter().map(|(id, _, _)| id.clone()).collect();
+        self.wait_for_windows(&ids, CMD_WAIT_TIMEOUT).await;
+
         Ok(())
-    }
-
-    async fn wait_for_window(&mut self, id: &WindowId, timeout: Duration) {
-        trace!("wait_for_window: waiting for {id} (timeout {timeout:?})");
-        let start = std::time::Instant::now();
-        let mut attempts = 0u32;
-        loop {
-            if start.elapsed() > timeout {
-                warn!("wait_for_window: timeout for {id} after {attempts} polls");
-                return;
-            }
-
-            if let Ok(CmdResponse::Windows(windows)) = self.back.execute(BackendCmd::List).await
-                && let Some(w) = windows.iter().find(|w| &w.id == id)
-                && w.is_at_prompt
-            {
-                trace!("wait_for_window: {id} at_prompt after {} polls", attempts + 1);
-                return;
-            }
-
-            attempts += 1;
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
     }
 
     async fn collect_feedback(&mut self, executed: Vec<ExecutedBlock>) -> String {
@@ -353,7 +363,7 @@ pwd && tree --gitignore
         }
     }
 
-    async fn execute_close(&mut self, title: &str) -> Option<WindowId> {
+    async fn execute_close(&mut self, title: &str) -> String {
         if let Some(id) = self.get_id_for_title(title).await {
             info!("execute_close: closing '{title}' (id={id})");
             let _ = self
@@ -363,10 +373,10 @@ pwd && tree --gitignore
                 }))
                 .await;
             self.watcher.remove_by_title(title);
-            Some(id)
+            format!("[{title}] closed (id={id})")
         } else {
             warn!("execute_close: window '{title}' not found");
-            None
+            format!("[{title}] Error: window not found")
         }
     }
 

@@ -58,10 +58,7 @@ async fn tick_agent_launches_window_and_session_tracks_it() {
 
     let mut server = create_server(None, Box::new(agent), true).await.unwrap();
     server.tick().await.unwrap();
-    server
-        .wait_trigger(Some(Duration::from_secs(2)))
-        .await
-        .unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
     server.tick().await.unwrap();
 
     assert_test_agent(&server);
