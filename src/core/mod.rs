@@ -1,7 +1,7 @@
 use crate::agent::{Agent, AgentResponse};
 use crate::backend::watch::Watcher;
 use crate::backend::{
-    BackendCmd, CloseCmd, CmdResponse, GetTextCmd, LaunchCmd, TerminalBackend, WindowId,
+    BackendCmd, CloseCmd, CmdResponse, GetTextCmd, LaunchCmd, SendTextCmd, TerminalBackend, WindowId,
 };
 use crate::types::{BlockMode, ParsedSegment, TickTrigger};
 use rustyline_async::ReadlineError;
@@ -9,7 +9,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::select;
-use tracing::info;
+use tracing::{info, warn, debug, trace};
 
 pub mod utils;
 
@@ -17,7 +17,7 @@ use crate::prompt::Prompt;
 use crate::response::parse_response;
 use utils::sleep_some_or_forever;
 
-const TRIGGER_TIMEOUT: Duration = Duration::from_secs(30);
+const TRIGGER_TIMEOUT: Duration = Duration::from_secs(1);
 const CMD_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Error)]
@@ -46,7 +46,6 @@ struct ExecutedBlock {
     window_id: Option<WindowId>,
     #[allow(dead_code)]
     mode: BlockMode,
-    /// Pre-computed result string (for Write and Close)
     result: Option<String>,
 }
 
@@ -71,10 +70,12 @@ impl Server {
     }
 
     pub async fn run(&mut self) -> Result<(), CoreError> {
+        info!("run: starting server main loop");
         let stdin = tokio::io::stdin();
         let reader = BufReader::new(stdin);
         let mut lines = reader.lines();
 
+        info!("run: executing initial windows");
         let segments = parse_response(
             r"Current task
 ```task
@@ -89,6 +90,7 @@ pwd && tree --gitignore
         let executed = self.execute_blocks(&segments).await;
 
         let feedback = self.collect_feedback(executed).await;
+        info!("run: initial feedback collected ({} chars)", feedback.len());
 
         self.last_tick = Some((
             AgentResponse {
@@ -105,17 +107,23 @@ pwd && tree --gitignore
             }))
             .await;
 
+        info!("run: entering tick loop");
         loop {
             if self.debug {
                 let _ = lines.next_line().await;
             }
+            info!("run: waiting for trigger (timeout {:?})", TRIGGER_TIMEOUT);
             let _events = self.wait_trigger(Some(TRIGGER_TIMEOUT)).await?;
+            info!("run: trigger fired, starting tick");
             self.tick().await?;
+            info!("run: tick completed");
         }
     }
 
     pub async fn tick(&mut self) -> Result<(), CoreError> {
-        self.refresh_watch_windows().await?;
+        info!("tick: rerunning watch windows");
+        self.rerun_watch_windows().await?;
+        info!("tick: watch windows rerun done, building prompt");
 
         let (prev_response, prev_feedback) = match self.last_tick.take() {
             Some((resp, fb)) => (Some(resp), Some(fb)),
@@ -123,15 +131,20 @@ pwd && tree --gitignore
         };
 
         let prompt = Prompt::build(self.back.as_ref(), prev_response, prev_feedback).await?;
+        info!("tick: prompt built, calling agent");
 
         let response = self.agent.step(&prompt).await?;
+        info!("tick: agent responded ({} segments)", response.segments.len());
 
         let executed = self.execute_blocks(&response.segments).await;
+        info!("tick: {} blocks executed", executed.len());
 
         let feedback = self.collect_feedback(executed).await;
+        info!("tick: feedback collected ({} chars)", feedback.len());
 
         self.last_tick = Some((response.clone(), feedback));
 
+        info!("tick: done");
         Ok(())
     }
 
@@ -139,12 +152,6 @@ pwd && tree --gitignore
         &mut self,
         timeout: Option<Duration>,
     ) -> Result<TickTrigger, CoreError> {
-        let exited = self.watcher.poll_exited(self.back.as_ref()).await?;
-        if !exited.is_empty() {
-            info!("watcher exited: {exited:?}");
-            return Ok(TickTrigger::WindowsExited(exited));
-        }
-
         select! {
             () = sleep_some_or_forever(timeout) => {
                 Ok(TickTrigger::IdleTimeout)
@@ -187,7 +194,7 @@ pwd && tree --gitignore
                 }
             }
             BlockMode::Text => {
-                let window_id = self.execute_one_shot(title, content).await;
+                let window_id = self.execute_text(title, content).await;
                 ExecutedBlock {
                     title: title.to_string(),
                     window_id: Some(window_id),
@@ -207,36 +214,75 @@ pwd && tree --gitignore
         }
     }
 
-    async fn execute_one_shot(&mut self, title: &str, content: &str) -> WindowId {
+    async fn execute_text(&mut self, title: &str, content: &str) -> WindowId {
+        info!("execute_text: launching shell for '{title}'");
         let launch_cmd = LaunchCmd {
             title: Some(title.to_string()),
-            command: content.to_string(),
+            command: String::new(),
         };
 
         let id = match self.back.cmd_launch(&launch_cmd).await {
             Ok(id) => {
-                self.watcher
-                    .track(id.clone(), title.to_string(), content.to_string());
+                info!("execute_text: shell launched id={id} for '{title}'");
                 id
             }
             Err(e) => {
-                info!("launch error for '{title}': {e}");
+                warn!("execute_text: launch error for '{title}': {e}");
                 return WindowId::new("error");
             }
         };
 
-        // Wait for command to finish (at_prompt) with timeout
+        debug!("execute_text: sending command to '{title}' (id={id})");
+        let send_cmd = SendTextCmd {
+            window: id.clone(),
+            text: vec![format!("{content}\n")],
+        };
+        if let Err(e) = self.back.execute(BackendCmd::Send(send_cmd)).await {
+            warn!("execute_text: send-text error for '{title}': {e}");
+        }
+
+        self.watcher
+            .track(id.clone(), title.to_string(), content.to_string());
+
+        info!("execute_text: waiting for '{title}' (id={id})");
         self.wait_for_window(&id, CMD_WAIT_TIMEOUT).await;
+        info!("execute_text: done '{title}' (id={id})");
 
         id
     }
 
-    /// Poll until window reaches `at_prompt` or timeout.
+    async fn rerun_watch_windows(&mut self) -> Result<(), CoreError> {
+        let entries = self.watcher.watch_entries();
+        let count = entries.len();
+        if count == 0 {
+            debug!("rerun_watch_windows: no tracked windows");
+            return Ok(());
+        }
+        info!("rerun_watch_windows: rerunning {count} windows");
+        for (id, title, command) in entries {
+            debug!("rerun_watch_windows: sending to '{title}' (id={id})");
+            let send_cmd = SendTextCmd {
+                window: id.clone(),
+                text: vec![format!("clear && {command}\n")],
+            };
+            if let Err(e) = self.back.execute(BackendCmd::Send(send_cmd)).await {
+                warn!("rerun_watch_windows: send-text error for '{title}' (id={id}): {e}");
+                continue;
+            }
+
+            self.wait_for_window(&id, CMD_WAIT_TIMEOUT).await;
+        }
+        info!("rerun_watch_windows: done");
+        Ok(())
+    }
+
     async fn wait_for_window(&mut self, id: &WindowId, timeout: Duration) {
+        trace!("wait_for_window: waiting for {id} (timeout {timeout:?})");
         let start = std::time::Instant::now();
+        let mut attempts = 0u32;
         loop {
             if start.elapsed() > timeout {
-                info!("wait_for_window: timeout for {id}");
+                warn!("wait_for_window: timeout for {id} after {attempts} polls");
                 return;
             }
 
@@ -244,14 +290,15 @@ pwd && tree --gitignore
                 && let Some(w) = windows.iter().find(|w| &w.id == id)
                 && w.is_at_prompt
             {
+                trace!("wait_for_window: {id} at_prompt after {} polls", attempts + 1);
                 return;
             }
 
+            attempts += 1;
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
 
-    /// After executing blocks, read window output for one-shot commands.
     async fn collect_feedback(&mut self, executed: Vec<ExecutedBlock>) -> String {
         let mut feedback = String::new();
 
@@ -273,7 +320,6 @@ pwd && tree --gitignore
         feedback
     }
 
-    /// Read window content + exit code for feedback.
     async fn read_window_output(&mut self, id: &WindowId, title: &str) -> String {
         let text = match self
             .back
@@ -309,6 +355,7 @@ pwd && tree --gitignore
 
     async fn execute_close(&mut self, title: &str) -> Option<WindowId> {
         if let Some(id) = self.get_id_for_title(title).await {
+            info!("execute_close: closing '{title}' (id={id})");
             let _ = self
                 .back
                 .execute(BackendCmd::Close(CloseCmd {
@@ -318,38 +365,9 @@ pwd && tree --gitignore
             self.watcher.remove_by_title(title);
             Some(id)
         } else {
+            warn!("execute_close: window '{title}' not found");
             None
         }
-    }
-
-    async fn refresh_watch_windows(&mut self) -> Result<(), CoreError> {
-        let entries = self.watcher.watch_entries();
-        for (old_id, title, command) in entries {
-            let _ = self
-                .back
-                .execute(BackendCmd::Close(CloseCmd {
-                    window_id: old_id.clone(),
-                }))
-                .await;
-
-            let launch_cmd = LaunchCmd {
-                title: Some(title.clone()),
-                command: command.clone(),
-            };
-
-            let new_id = match self.back.cmd_launch(&launch_cmd).await {
-                Ok(id) => id,
-                Err(e) => {
-                    info!("refresh: launch error for '{title}': {e}");
-                    continue;
-                }
-            };
-
-            self.wait_for_window(&new_id, CMD_WAIT_TIMEOUT).await;
-
-            self.watcher.update_id(&old_id, new_id);
-        }
-        Ok(())
     }
 
     async fn get_id_for_title(&mut self, title: &str) -> Option<WindowId> {
@@ -363,6 +381,7 @@ pwd && tree --gitignore
     }
 
     fn execute_file_write(path: &str, content: &str) -> String {
+        info!("execute_file_write: writing {} bytes to '{path}'", content.len());
         let file_path = std::path::Path::new(path);
         if let Some(parent) = file_path.parent()
             && !parent.as_os_str().is_empty()

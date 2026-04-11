@@ -1,4 +1,3 @@
-use std::env;
 use async_trait::async_trait;
 use kitty_rc::{
     CloseWindowCommand, GetTextCommand, Kitty, KittyBuilder, LaunchCommand, LsCommand,

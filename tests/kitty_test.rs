@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 use tai::backend::kitty::KittyBackend;
-use tai::backend::{BackendCmd, CmdResponse, LaunchCmd, Terminal, TerminalBackend};
+use tai::backend::{BackendCmd, CmdResponse, LaunchCmd, TerminalBackend};
 
 #[allow(clippy::expect_used)]
 async fn spawn_backend_with_path() -> (KittyBackend, PathBuf) {
@@ -224,15 +224,13 @@ async fn set_title() {
 }
 
 #[tokio::test]
-async fn watcher_detects_exit() {
-    use tai::backend::watch::Watcher;
-
+async fn launch_empty_command_creates_shell() {
     let backend = spawn_backend().await;
 
     let CmdResponse::WindowCreated(window_id) = backend
         .execute(BackendCmd::Launch(LaunchCmd {
-            title: Some("test-watch".to_string()),
-            command: "echo quick-exit".to_string(),
+            title: Some("test-empty-shell".to_string()),
+            command: String::new(),
         }))
         .await
         .expect("launch should succeed")
@@ -240,29 +238,15 @@ async fn watcher_detects_exit() {
         panic!("expected WindowCreated")
     };
 
-    let mut watcher = Watcher::new();
-    watcher.track(
-        window_id.clone(),
-        "test".to_string(),
-        "echo test".to_string(),
-    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let mut detected = false;
-    for _ in 0..30 {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let exited = watcher
-            .poll_exited(&backend)
-            .await
-            .expect("poll should work");
-        if let Some(Terminal { id, .. }) = exited.first()
-            && *id == window_id
-        {
-            detected = true;
-        }
-        if detected {
-            break;
-        }
-    }
-
-    assert!(detected, "should detect window exit");
+    let CmdResponse::Windows(windows) = backend
+        .execute(BackendCmd::List)
+        .await
+        .expect("list should work")
+    else {
+        panic!("expected Windows")
+    };
+    let found = windows.iter().any(|w| w.id == window_id);
+    assert!(found, "empty command window should appear in list");
 }

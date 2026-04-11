@@ -13,7 +13,7 @@ use futures_util::Stream;
 use futures_util::stream::StreamExt;
 use serde_json::Value;
 use std::pin::Pin;
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 
 pub struct LlmAgent {
     model: String,
@@ -38,6 +38,7 @@ type MyStreamingType = Pin<Box<dyn Stream<Item = Result<Value, OpenAIError>> + S
 impl Agent for LlmAgent {
     #[allow(clippy::indexing_slicing)]
     async fn step(&self, prompt: &Prompt) -> Result<AgentResponse, AgentError> {
+        info!("llm step: building request for model '{}'", self.model);
         let request = CreateChatCompletionRequestArgs::default()
             .model(&self.model)
             .messages(prompt_to_messages(prompt))
@@ -49,12 +50,20 @@ impl Agent for LlmAgent {
             info!("Send request: {s}");
         }
 
-        let mut stream: MyStreamingType = self.client.chat().create_stream_byot(request).await?;
+        info!("llm step: creating stream...");
+        let mut stream: MyStreamingType = match self.client.chat().create_stream_byot(request).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("llm step: failed to create stream: {e}");
+                return Err(AgentError::Llm(e));
+            }
+        };
 
         let mut text = String::new();
         let mut reasoning = String::new();
         let mut thinks = false;
 
+        info!("llm step: reading stream...");
         while let Some(result) = stream.next().await {
             match result {
                 Ok(res) => {
@@ -78,20 +87,24 @@ impl Agent for LlmAgent {
                     }
                 }
                 Err(e) => {
-                    error!("{e:#?}");
+                    warn!("llm step: stream error: {e:#?}");
                 }
             }
         }
         println!("\nDONE");
+
+        info!("llm step: stream complete, text {} bytes, reasoning {} bytes", text.len(), reasoning.len());
 
         let resp = AgentResponse {
             reasoning,
             segments: parse_response(&text),
         };
 
+        info!("llm step: parsed {} segments", resp.segments.len());
+
         if self.debug {
             let s = toml::to_string_pretty(&resp).unwrap_or_else(|e| e.to_string());
-            info!("Response: {s}");
+            debug!("Response: {s}");
         }
 
         Ok(resp)

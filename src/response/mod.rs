@@ -375,7 +375,7 @@ mod tests {
     fn test_inline_block_close() {
         let text = "```build\necho done```";
         let segments = parse_response(text);
-        assert!(segments.len() >= 1);
+        assert!(!segments.is_empty());
         assert!(matches!(
             &segments[0],
             ParsedSegment::Block { window, content, .. }
@@ -387,7 +387,7 @@ mod tests {
     fn test_inline_close_with_prose_after() {
         let text = "```build\necho hi```\nSome prose";
         let segments = parse_response(text);
-        assert!(segments.len() >= 1);
+        assert!(!segments.is_empty());
         assert!(matches!(
             &segments[0],
             ParsedSegment::Block { window, content, .. }
