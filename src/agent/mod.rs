@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_openai::error::OpenAIError;
 use serde::{Deserialize, Serialize};
 use crate::prompt::Prompt;
-use crate::types::{BlockMode, ParsedSegment};
+use crate::types::{BlockMode, ParsedBlock};
 
 mod test_agent;
 mod llm;
@@ -24,7 +24,8 @@ pub trait Agent: Send + Sync {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentResponse {
     pub reasoning: String,
-    pub segments: Vec<ParsedSegment>,
+    pub segments: Vec<ParsedBlock>,
+    pub outro: Option<String>,
 }
 
 impl AgentResponse {
@@ -33,14 +34,7 @@ impl AgentResponse {
         Self {
             reasoning: String::new(),
             segments: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn prose(text: impl Into<String>) -> Self {
-        Self {
-            reasoning: String::new(),
-            segments: vec![ParsedSegment::Prose(text.into())],
+            outro: None,
         }
     }
 
@@ -48,11 +42,13 @@ impl AgentResponse {
     pub fn block(window: impl Into<String>, mode: BlockMode, content: impl Into<String>) -> Self {
         Self {
             reasoning: String::new(),
-            segments: vec![ParsedSegment::Block {
+            segments: vec![ParsedBlock {
                 window: window.into(),
                 mode,
                 content: content.into(),
+                prose: None,
             }],
+            outro: None,
         }
     }
 

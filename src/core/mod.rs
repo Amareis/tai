@@ -1,7 +1,7 @@
 use crate::agent::{Agent, AgentResponse};
 use crate::backend::Backend;
 use crate::prompt::{Prompt, TrackedView};
-use crate::types::{BlockMode, ParsedSegment};
+use crate::types::{BlockMode, ParsedBlock};
 use std::fmt::Write;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -29,7 +29,6 @@ pub struct Server {
     back: Box<dyn Backend>,
     pub agent: Box<dyn Agent>,
     tracked: Vec<TrackedCmd>,
-    pending: Vec<ParsedSegment>,
     pub debug: bool,
     tick_n: u64,
     last_tick: Option<AgentResponse>,
@@ -43,7 +42,6 @@ impl Server {
             back,
             agent,
             tracked: Vec::new(),
-            pending: Vec::new(),
             debug: false,
             tick_n: 0,
             last_tick: None,
@@ -60,18 +58,20 @@ impl Server {
         info!("run: starting server");
         std::fs::create_dir_all(&self.debug_dir).ok();
 
-        let segments: Vec<ParsedSegment> = initial
+        let segments: Vec<ParsedBlock> = initial
             .iter()
-            .map(|(title, cmd)| ParsedSegment::Block {
+            .map(|(title, cmd)| ParsedBlock {
                 window: title.to_string(),
                 mode: BlockMode::View,
                 content: cmd.to_string(),
+                prose: None,
             })
             .collect();
-        self.apply_segments(&segments);
+        self.apply_segments_sorted(&segments);
         self.last_tick = Some(AgentResponse {
             reasoning: String::new(),
             segments,
+            outro: None,
         });
 
         info!("run: entering tick loop");
@@ -91,16 +91,17 @@ impl Server {
         self.tick_n += 1;
         info!("tick #{}: start", self.tick_n);
 
-        self.debug_write_pending();
-        self.debug_wait("before apply_pending").await;
+        let pending = self.last_tick.as_ref().map(|r| r.segments.clone()).unwrap_or_default();
+        self.debug_write_segments("pending", &pending);
+        self.debug_wait("before apply").await;
 
-        self.apply_pending();
+        self.apply_segments_sorted(&pending);
 
         let tracked_views = self.run_tracked().await;
         self.debug_write_views(&tracked_views);
 
         let prev_response = self.last_tick.take();
-        let prompt = Prompt::build(tracked_views, prev_response);
+        let prompt = Prompt::build(tracked_views, prev_response, self.tick_n);
         info!("tick #{}: prompt built, calling agent", self.tick_n);
 
         self.debug_wait("before agent call").await;
@@ -109,40 +110,32 @@ impl Server {
         info!("tick #{}: agent responded ({} segments)", self.tick_n, response.segments.len());
 
         self.debug_write_response(&response);
-
-        self.pending.clone_from(&response.segments);
         self.last_tick = Some(response);
 
         info!("tick #{}: done", self.tick_n);
         Ok(())
     }
 
-    fn apply_pending(&mut self) {
-        let pending = std::mem::take(&mut self.pending);
-        self.apply_segments(&pending);
-    }
-
-    fn apply_segments(&mut self, segments: &[ParsedSegment]) {
-        for segment in segments {
-            if let ParsedSegment::Block {
-                window,
-                mode,
-                content,
-            } = segment
-            {
-                match mode {
-                    BlockMode::Close => {
-                        self.tracked.retain(|tc| tc.title != *window);
-                        info!("apply: '{window}' closed");
-                    }
-                    BlockMode::View => {
-                        self.upsert_tracked(window.clone(), content.clone(), true);
-                        info!("apply: '{window}' tracked (view)");
-                    }
-                    BlockMode::Exec => {
-                        self.upsert_tracked(window.clone(), content.clone(), false);
-                        info!("apply: '{window}' tracked (exec)");
-                    }
+    fn apply_segments_sorted(&mut self, segments: &[ParsedBlock]) {
+        let mut sorted: Vec<&ParsedBlock> = segments.iter().collect();
+        sorted.sort_by_key(|b| match b.mode {
+            BlockMode::Close => 0,
+            BlockMode::Exec => 1,
+            BlockMode::View => 2,
+        });
+        for block in &sorted {
+            match block.mode {
+                BlockMode::Close => {
+                    self.tracked.retain(|tc| tc.title != block.window);
+                    info!("apply: '{}' closed", block.window);
+                }
+                BlockMode::Exec => {
+                    self.upsert_tracked(block.window.clone(), block.content.clone(), false);
+                    info!("apply: '{}' tracked (exec)", block.window);
+                }
+                BlockMode::View => {
+                    self.upsert_tracked(block.window.clone(), block.content.clone(), true);
+                    info!("apply: '{}' tracked (view)", block.window);
                 }
             }
         }
@@ -170,6 +163,11 @@ impl Server {
             return Vec::new();
         }
 
+        self.tracked.sort_by(|a, b| {
+            let order = |rerun: bool| i32::from(rerun);
+            order(a.rerun).cmp(&order(b.rerun))
+        });
+
         let mut views = Vec::with_capacity(self.tracked.len());
         for tc in &mut self.tracked {
             if tc.rerun || tc.cached_output.is_none() {
@@ -185,6 +183,7 @@ impl Server {
                 title: tc.title.clone(),
                 output: tc.cached_output.clone().unwrap_or_default(),
                 exit_code: tc.cached_exit.unwrap_or(0),
+                rerun: tc.rerun,
             });
         }
 
@@ -212,28 +211,24 @@ impl Server {
         }
     }
 
-    fn debug_write_pending(&self) {
-        for seg in &self.pending {
-            if let ParsedSegment::Block { window, mode, content: block_content } = seg {
-                let filename = format!("pending-{window}");
-                let path = self.debug_dir.join(&filename);
-                let mut content = String::new();
-                let _ = writeln!(content, "# mode={mode}");
-                content.push_str(block_content);
-                std::fs::write(&path, content).ok();
-            }
+    fn debug_write_segments(&self, prefix: &str, segments: &[ParsedBlock]) {
+        for block in segments {
+            let filename = format!("{prefix}-{window}", window = block.window);
+            let path = self.debug_dir.join(&filename);
+            let mut content = String::new();
+            let _ = writeln!(content, "# mode={}", block.mode);
+            content.push_str(&block.content);
+            std::fs::write(&path, content).ok();
         }
     }
 
     fn debug_write_response(&self, response: &AgentResponse) {
-        for seg in &response.segments {
-            if let ParsedSegment::Block { window, mode, content: block_content } = seg {
-                let path = self.debug_dir.join(window);
-                let mut content = String::new();
-                let _ = writeln!(content, "# mode={mode}");
-                content.push_str(block_content);
-                std::fs::write(&path, content).ok();
-            }
+        for block in &response.segments {
+            let path = self.debug_dir.join(&block.window);
+            let mut content = String::new();
+            let _ = writeln!(content, "# mode={}", block.mode);
+            content.push_str(&block.content);
+            std::fs::write(&path, content).ok();
         }
     }
 }

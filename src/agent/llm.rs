@@ -1,7 +1,7 @@
 use super::{Agent, AgentError, AgentResponse};
 use crate::prompt::{Prompt, TrackedView};
 use crate::response::parse_response;
-use crate::types::{BlockMode, ParsedSegment};
+use crate::types::BlockMode;
 use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use futures_util::Stream;
 use futures_util::stream::StreamExt;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::pin::Pin;
 use tracing::{debug, error, info, warn};
 
@@ -95,10 +96,7 @@ impl Agent for LlmAgent {
 
         info!("llm step: stream complete, text {} bytes, reasoning {} bytes", text.len(), reasoning.len());
 
-        let resp = AgentResponse {
-            reasoning,
-            segments: parse_response(&text),
-        };
+        let resp = parse_response(reasoning, &text);
 
         info!("llm step: parsed {} segments", resp.segments.len());
 
@@ -116,53 +114,103 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
     let mut ms: Vec<ChatCompletionRequestMessage> =
         vec![ChatCompletionRequestSystemMessage::from(prompt.system.clone()).into()];
 
+    let prev_titles: HashSet<&str> = prompt
+        .previous_response
+        .as_ref()
+        .map(|resp| {
+            resp.segments
+                .iter()
+                .map(|b| b.window.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let tracked_map: std::collections::HashMap<&str, &TrackedView> = prompt
+        .tracked
+        .iter()
+        .map(|v| (v.title.as_str(), v))
+        .collect();
+
+    // 1. Persistent windows (not from previous response)
     for view in &prompt.tracked {
-        ms.push(render_tracked(view));
+        if !prev_titles.contains(view.title.as_str()) {
+            ms.push(render_block_assistant(&view.title, BlockMode::View, "", None));
+            ms.push(render_result_user(view));
+        }
     }
 
+    // 2. Previous response blocks (interleaved assistant/user)
     if let Some(prev) = &prompt.previous_response {
-        let mut parts: Vec<String> = vec![];
-        parts.push("## Your previous response".to_string());
-        parts.push(format!(
-            "<reasoning>\n{}\n</reasoning>",
-            prev.reasoning.clone()
-        ));
-        parts.push(
-            prev.segments
-                .iter()
-                .map(|s| match s {
-                    ParsedSegment::Block {
-                        window,
-                        mode,
-                        content,
-                    } => {
-                        if *mode == BlockMode::View && content.is_empty() {
-                            format!("```{window}\n```")
-                        } else if *mode == BlockMode::Close {
-                            format!("```{window}:close\n```")
-                        } else if *mode == BlockMode::Exec {
-                            format!("```{window}:exec\n{content}\n```")
-                        } else {
-                            format!("```{window}\n{content}\n```")
-                        }
-                    }
-                    ParsedSegment::Prose(t) => t.clone(),
-                })
-                .collect(),
-        );
-        ms.push(ChatCompletionRequestAssistantMessage::from(parts.join("\n")).into());
+        for block in &prev.segments {
+            ms.push(render_block_assistant(
+                &block.window,
+                block.mode,
+                &block.content,
+                block.prose.as_deref(),
+            ));
+            if let Some(view) = tracked_map.get(block.window.as_str()) {
+                ms.push(render_result_user(view));
+            }
+        }
+
+        // 3. Outro (trailing prose)
+        if let Some(outro) = &prev.outro {
+            ms.push(ChatCompletionRequestAssistantMessage::from(outro.clone()).into());
+        }
     }
+
+    // 4. Dashboard
+    ms.push(render_dashboard(prompt));
 
     ms
 }
 
-fn render_tracked(view: &TrackedView) -> ChatCompletionRequestMessage {
-    let trimmed = view.output.trim();
-    let body = if trimmed.is_empty() {
-        format!("(empty, exit {})", view.exit_code)
-    } else {
-        format!("exit {}\n```\n{}\n```", view.exit_code, trimmed)
-    };
-    ChatCompletionRequestUserMessage::from(format!("## [{title}]\n{body}", title = view.title, body = body))
-        .into()
+fn render_block_assistant(
+    window: &str,
+    mode: BlockMode,
+    content: &str,
+    prose: Option<&str>,
+) -> ChatCompletionRequestMessage {
+    let mut text = String::new();
+    if let Some(p) = prose {
+        text.push_str(p);
+        text.push('\n');
+    }
+    match mode {
+        BlockMode::Close => {
+            let _ = std::fmt::Write::write_fmt(&mut text, format_args!("```{window}:close\n```"));
+        }
+        BlockMode::Exec => {
+            let _ = std::fmt::Write::write_fmt(&mut text, format_args!("```{window}:exec\n{content}\n```"));
+        }
+        BlockMode::View => {
+            let _ = std::fmt::Write::write_fmt(&mut text, format_args!("```{window}\n{content}\n```"));
+        }
+    }
+    ChatCompletionRequestAssistantMessage::from(text).into()
+}
+
+fn render_result_user(view: &TrackedView) -> ChatCompletionRequestMessage {
+    let mut body = String::new();
+    body.push_str(&view.output);
+    if !view.output.ends_with('\n') && !view.output.is_empty() {
+        body.push('\n');
+    }
+    let _ = std::fmt::Write::write_fmt(&mut body, format_args!("exit {}", view.exit_code));
+    ChatCompletionRequestUserMessage::from(body).into()
+}
+
+fn render_dashboard(prompt: &Prompt) -> ChatCompletionRequestMessage {
+    let mut body = String::from("== Windows ==\n");
+    for view in &prompt.tracked {
+        let lines = view.output.lines().count();
+        let mode = if view.rerun { "view" } else { "exec" };
+        let status = if view.rerun { "rerun" } else { "cached" };
+        let _ = std::fmt::Write::write_fmt(
+            &mut body,
+            format_args!("{}: {} lines, {} ({})\n", view.title, lines, mode, status),
+        );
+    }
+    let _ = std::fmt::Write::write_fmt(&mut body, format_args!("\n== Tick #{} ==", prompt.tick_n));
+    ChatCompletionRequestUserMessage::from(body).into()
 }

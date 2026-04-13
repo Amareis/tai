@@ -108,7 +108,14 @@ src/
 
 Основные: `tokio`, `async-openai` (streaming + BYOT), `duct` (shell), `clap` (CLI), `tracing`, `serde`.
 
-Clippy: pedantic, panic/indexing/unwrap — deny.
+Clippy: pedantic, panic/indexing/unwrap — deny. Конфиг уже в `.cargo/config.toml` — просто `cargo clippy`, без флагов.
+
+## Команды для проверки
+
+```bash
+cargo test        # все тесты (юнит + интеграционные)
+cargo clippy      # линтер (настроен pedantic)
+```
 
 ## Философия
 

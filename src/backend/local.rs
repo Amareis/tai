@@ -22,7 +22,7 @@ impl LocalBackend {
 impl Backend for LocalBackend {
     async fn run(&self, title: &str, command: &str) -> CmdOutput {
         debug!("run: executing '{title}': {command}");
-        let full_script = format!("set -ex -o pipefail;\n{command}");
+        let full_script = format!("set -e -o pipefail;\n{command}");
 
         let result = tokio::task::spawn_blocking(move || {
             match duct::cmd!("bash", "-c", &full_script)

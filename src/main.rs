@@ -20,6 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("task", "cat TASK.md"),
                 ("tree", "pwd && tree --gitignore"),
                 ("mind", "cat mind.md"),
+                ("task", "cat AGENTS.md"),
             ];
             tai::run_server(debug, &initial).await
         }

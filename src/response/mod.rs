@@ -1,12 +1,65 @@
-use crate::types::{BlockMode, ParsedSegment};
+use crate::agent::AgentResponse;
+use crate::types::{BlockMode, ParsedBlock};
 
 struct Header {
     window: String,
     mode: BlockMode,
 }
 
+enum ParsedSegment {
+    /// Code block: ` ```title[:mode]\ncontent\n``` `
+    Block {
+        window: String,
+        mode: BlockMode,
+        content: String,
+    },
+    /// Текст вне блоков — prose
+    Prose(String),
+}
+
 #[must_use]
-pub fn parse_response(input: &str) -> Vec<ParsedSegment> {
+pub fn parse_response(reasoning: String, input: &str) -> AgentResponse {
+    let raw = parse_response_segments(input);
+
+    let mut blocks: Vec<ParsedBlock> = Vec::new();
+    let mut prose_buf: Option<String> = None;
+
+    for segment in raw {
+        match segment {
+            ParsedSegment::Prose(text) => {
+                prose_buf = Some(match prose_buf {
+                    Some(prev) => format!("{prev}\n{text}"),
+                    None => text,
+                });
+            }
+            ParsedSegment::Block {
+                window,
+                mode,
+                content,
+            } => {
+                blocks.push(ParsedBlock {
+                    window,
+                    mode,
+                    content,
+                    prose: prose_buf.take(),
+                });
+            }
+        }
+    }
+
+    // trailing prose could be attached to last block instead of outro,
+    // but that changes semantics — keeping as explicit outro for now
+    let outro = prose_buf.filter(|s| !s.is_empty());
+
+    AgentResponse {
+        reasoning,
+        segments: blocks,
+        outro,
+    }
+}
+
+#[must_use]
+fn parse_response_segments(input: &str) -> Vec<ParsedSegment> {
     let mut segments = Vec::new();
     let mut pos = 0usize;
 
@@ -156,7 +209,7 @@ mod tests {
     #[test]
     fn test_parse_prose_only() {
         let text = "Hello, this is prose.\nNo blocks here.";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -167,7 +220,7 @@ mod tests {
     #[test]
     fn test_parse_single_block() {
         let text = "Before\n```build\ncargo build\n```\nAfter";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 3);
         assert!(matches!(&segments[0], ParsedSegment::Prose(_)));
         assert!(matches!(
@@ -181,7 +234,7 @@ mod tests {
     #[test]
     fn test_parse_close_mode() {
         let text = "```build:close\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -193,14 +246,14 @@ mod tests {
     #[test]
     fn test_parse_multiple_blocks() {
         let text = "```1\necho hello\n```\n```2\necho world\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
     }
 
     #[test]
     fn test_parse_heredoc_inside_block() {
         let text = "```build\ncat > config.yaml << 'EOF'\nserver:\n  port: 8080\n  note: \"``` not a closer\"\nEOF\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -212,7 +265,7 @@ mod tests {
     #[test]
     fn test_parse_unquoted_heredoc() {
         let text = "```build\ncat > file << DELIM\ncontent with ``` inside\nDELIM\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -224,14 +277,14 @@ mod tests {
     #[test]
     fn test_parse_double_quoted_heredoc() {
         let text = "```build\ncat > file <<\"DELIM\"\ncontent\nDELIM\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
     }
 
     #[test]
     fn test_parse_no_mode_suffix() {
         let text = "```build\ncargo test\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -243,7 +296,7 @@ mod tests {
     #[test]
     fn test_parse_unclosed_block() {
         let text = "```build\ncargo build";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -299,7 +352,7 @@ mod tests {
     #[test]
     fn test_inline_block_open() {
         let text = "Here we go:```build\ncargo build\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
         assert!(matches!(
             &segments[0],
@@ -315,7 +368,7 @@ mod tests {
     #[test]
     fn test_inline_block_with_space() {
         let text = "Some text ```build\ncargo build\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
         assert!(matches!(
             &segments[0],
@@ -331,7 +384,7 @@ mod tests {
     #[test]
     fn test_inline_block_close() {
         let text = "```build\necho done```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert!(!segments.is_empty());
         assert!(matches!(
             &segments[0],
@@ -343,7 +396,7 @@ mod tests {
     #[test]
     fn test_inline_close_with_prose_after() {
         let text = "```build\necho hi```\nSome prose";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert!(!segments.is_empty());
         assert!(matches!(
             &segments[0],
@@ -355,7 +408,7 @@ mod tests {
     #[test]
     fn test_heredoc_with_space_after_redirect() {
         let text = "```build\ncat > config.yaml << 'EOF'\nserver:\n  port: 8080\nEOF\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -367,7 +420,7 @@ mod tests {
     #[test]
     fn test_consecutive_blocks() {
         let text = "```build\ncargo build\n```\n```test\ncargo test\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
         assert!(matches!(
             &segments[0],
@@ -382,7 +435,7 @@ mod tests {
     #[test]
     fn test_empty_prose_between_blocks_ignored() {
         let text = "```build\ncargo build\n```\n\n\n```test\ncargo test\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
     }
 
@@ -393,7 +446,7 @@ cat src/lib.rs
 ``````shell
 cat src/main.rs
 ```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 3);
         assert!(matches!(&segments[0], ParsedSegment::Prose(_)));
     }
@@ -401,7 +454,7 @@ cat src/main.rs
     #[test]
     fn test_exec_block_basic() {
         let text = "```install:exec\ncargo add serde\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -414,7 +467,7 @@ cat src/main.rs
     fn test_exec_block_with_heredoc_inside() {
         let text =
             "```write-config:exec\ncat > config.toml << 'EOF'\n[build]\nrelease = true\nEOF\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -427,7 +480,7 @@ cat src/main.rs
     fn test_exec_block_with_backticks_inside() {
         let text =
             "```notes:exec\ncat > notes.md << 'EOF'\nSome ``` backticks inside\nand more\nEOF\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
@@ -439,7 +492,7 @@ cat src/main.rs
     #[test]
     fn test_exec_block_then_view_block() {
         let text = "```install:exec\ncargo add serde\n```\n```build\ncargo build\n```";
-        let segments = parse_response(text);
+        let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
         assert!(matches!(
             &segments[0],

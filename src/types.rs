@@ -30,18 +30,10 @@ impl std::fmt::Display for BlockMode {
     }
 }
 
-/// Сегмент ответа модели после парсинга.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ParsedSegment {
-    /// Code block: ` ```title[:mode]\ncontent\n``` `
-    ///
-    /// По умолчанию mode=text (send to stdin, auto-launch).
-    /// mode=close — закрыть окно.
-    Block {
-        window: String,
-        mode: BlockMode,
-        content: String,
-    },
-    /// Текст вне блоков — prose, сохраняется для контекста
-    Prose(String),
+pub struct ParsedBlock {
+    pub window: String,
+    pub mode: BlockMode,
+    pub content: String,
+    pub prose: Option<String>,
 }
