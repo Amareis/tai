@@ -1,80 +1,117 @@
 # TAI — Terminal Agent Interface
 
-> Агент — это пользователь терминала. Человек и ИИ — равноправные пользователи одной системы.
+> Rust-бинарник: LLM-агент в цикле тиков. Видит вывод команд, решает, действует.
 
-## Цель проекта
+## Как работает
 
-TAI — ядро на Rust, которое позволяет L-модели управлять терминальными сессиями как окнами своего внимания. Модель «видит» содержимое окон, отправляет в них команды, создаёт новые, сворачивает ненужные. Человек наблюдает за всем через встроенный TUI и может вмешиваться в любой момент.
+### Запуск
 
-Ключевая идея: **контекстное окно модели управляется явно через окна терминала**. Не весь мир втискивается в промпт — модель сама решает куда смотреть, а ядро собирает контекст из развёрнутых окон.
+```bash
+tai server          # обычный запуск
+tai server --debug  # пошаговый режим (Enter между тиками)
+```
 
-## Приоритет: Bootstrap
+CLI (`src/main.rs`) через clap парсит команду `server`, создаёт набор начальных окон (task, tree) и вызывает `run_server()` из `lib.rs`.
 
-Первоочередная задача — **минимальный рабочий цикл**: модель получает содержимое терминальных окон через TUI, отвечает с командами, ядро их исполняет, результат виден на следующем шаге. Всё остальное (S-модели, tmux, remote) — потом.
+### Цикл тиков
 
-MVP = ядро запускается → показывает TUI с чатом → человек пишет → модель видит окна и отвечает → ядро исполняет → результат виден → повтор.
+`Server` (`src/core/mod.rs`) крутит `loop`:
+
+1. **apply_pending** — берёт сегменты от предыдущего ответа агента, обновляет список `tracked`-команд
+2. **run_tracked** — выполняет команды:
+   - `View` — выполняется каждый тик (просмотр файлов, статусы)
+   - `Exec` — выполняется один раз, результат кешируется (запись файлов, установка пакетов)
+   - `Close` — убирает команду из отслеживаемых
+3. **build prompt** — системный промпт + содержимое всех окон + предыдущий ответ агента
+4. **agent.step()** — вызов LLM (streaming через async-openai)
+5. **parse_response** — разбор ответа на `ParsedSegment` (Block / Prose)
+6. Сохранить сегменты как pending для следующего тика
+
+**Выход:** когда `tracked` пуст (все окна закрыты).
+
+### Формат взаимодействия с моделью
+
+Модель получает user-сообщения с содержимым окон вида:
+
+```
+## [window-title]
+exit 0
+```
+output here
+```
+```
+
+И отвечает текстом с code blocks:
+
+```
+Some reasoning prose
+
+```window-title
+command to run
+```
+
+```another-title:exec
+one-shot command
+```
+
+```old-window:close
+```
+```
+
+Парсер (`src/response/mod.rs`) понимает heredoc-и внутри блоков — `<<'EOF'` защищает содержимое от ложных срабатываний на ` ``` `.
+
+## Структура проекта
+
+```
+src/
+├── main.rs              # CLI: tai server [--debug]
+├── lib.rs               # create_server(), run_server()
+├── types.rs             # BlockMode, ParsedSegment
+├── agent/
+│   ├── mod.rs           # Agent trait, AgentResponse, NopAgent, MockAgent
+│   ├── llm.rs           # LlmAgent — async-openai streaming (поддержка reasoning_content)
+│   └── test_agent.rs    # TestAgent — пошаговая проверка для E2E тестов
+├── backend/
+│   ├── mod.rs           # Backend trait, CmdOutput
+│   └── local.rs         # LocalBackend — bash -c через duct
+├── core/
+│   └── mod.rs           # Server — tick loop, tracked commands, apply/execute
+├── prompt/
+│   ├── mod.rs           # Prompt, TrackedView
+│   └── system_prompt.txt # Системный промпт для модели
+├── response/
+│   └── mod.rs           # parse_response() — парсинг code blocks с поддержкой heredoc
+└── tests/
+    └── server_test.rs   # E2E тесты с TestAgent + LocalBackend
+```
+
+## Ключевые типы
+
+| Тип | Где | Суть |
+|-----|-----|------|
+| `BlockMode` | `types.rs` | `View` / `Exec` / `Close` — режим окна |
+| `ParsedSegment` | `types.rs` | `Block { window, mode, content }` или `Prose(String)` |
+| `TrackedCmd` | `core/mod.rs` | Внутренний: title, command, rerun, cached_output/exit |
+| `TrackedView` | `prompt/mod.rs` | title, output, exit_code — для сборки промпта |
+| `Prompt` | `prompt/mod.rs` | system + tracked[] + previous_response |
+| `AgentResponse` | `agent/mod.rs` | reasoning + segments[] |
+| `CmdOutput` | `backend/mod.rs` | exit_code + stdout |
+
+## Трейты
+
+- **`Agent`** (`agent/mod.rs`) — `async fn step(&self, prompt: &Prompt) -> Result<AgentResponse, AgentError>`
+  - Реализации: `LlmAgent`, `NopAgent`, `MockAgent`, `TestAgent`
+- **`Backend`** (`backend/mod.rs`) — `async fn run(&self, title: &str, command: &str) -> CmdOutput`
+  - Реализация: `LocalBackend` (bash через duct)
+
+## Зависимости
+
+Основные: `tokio`, `async-openai` (streaming + BYOT), `duct` (shell), `clap` (CLI), `tracing`, `serde`.
+
+Clippy: pedantic, panic/indexing/unwrap — deny.
 
 ## Философия
 
-**Smalltalk + UNIX.** Терминальные сессии — живые объекты. Текст — универсальный интерфейс. Модель — не абстракция над системой, а пользователь терминала, как и человек.
-
-**TAI, не BAI.** Bash — одна из программ в терминале, не архитектурная основа. В терминале может быть Python REPL, Node REPL, vim, PowerShell, кастомные инструменты. Модель может сама себе писать утилиты.
-
-**Человек и ИИ — равноправные пользователи.** Оба видят одни и те же терминалы. Оба могут в них писать. Человек через TUI и клики, модель через code blocks.
-
-## Требования к коду
-
-**Строгие clippy-проверки.** Безопасный код по максимуму:
-
-```toml
-# Cargo.toml
-[lints.clippy]
-panic = "forbid"
-indexing_slicing = "forbid"
-unwrap_used = "forbid"
-expect_used = "forbid"
-```
-
-- Никаких `.unwrap()`, `.expect()` — только `?` и явная обработка ошибок (но в тестах можно, конечно)
-- Никакой индексации `arr[i]` — только `.get(i)`, итераторы, pattern matching
-- Никаких паник — код должен быть устойчивым к любым входным данным
-- `thiserror` для всех error types
-
-**Зависимости** — добавлять через `cargo add` без явных версий:
-
-```bash
-cargo add kitty-rc ratatui crossterm tokio clap serde serde_json ...
-```
-
-Не прописывать версии вручную в `Cargo.toml` — cargo сам подтянет актуальные.
-
-## Документация
-
-| Файл | Содержание |
-|------|-----------|
-| `AGENTS.md` | Этот файл — цель проекта, философия, процесс |
-| `ARCHITECTURE.md` | Техническая архитектура, модель данных, структура кода |
-| `PLAN.md` | Фазы реализации, задачи, зависимости |
-
-## Документация: жизненный цикл
-
-1. **Во время работы** — архитектурные решения и обсуждения фиксируются в `ARCHITECTURE.md`
-2. **При реализации** — документация переносится из `ARCHITECTURE.md` в doc-комментарии к коду и документацию модулей. `ARCHITECTURE.md` при этом упрощается — из подробного reference превращается в overview
-3. **По завершении** — цель и философия переезжают в `README.md`, технические подробности живут в doc-комментариях. `AGENTS.md` остаётся как указание для агентов (процесс, приоритеты). `ARCHITECTURE.md` может быть удалён когда всё перенесено в код
-
-## Процесс
-
-При завершении очередной фазы из `PLAN.md`:
-- **Подчищать план**: убирать выполненные задачи, обновлять статус
-- **Переносить документацию**: из `ARCHITECTURE.md` в doc-комментарии соответствующих модулей
-- Переносить уточнения из дискуссий в код (doc-комментарии) и `ARCHITECTURE.md`
-
-План должен всегда отражать текущее состояние — что сделано, что следующее.
-
-## Ссылки
-
-- Язык: Rust
-- Терминал: Kitty (через `kitty-rc` crate), tmux в будущем
-- TUI: ratatui
-- Async: tokio
-- LLM: `llm` crate (унифицированный интерфейс для Claude/GPT/etc)
+- **Контекстное окно управляется явно.** Модель решает, что читать и выполнять.
+- **Никаких спекуляций.** Результат команды — только на следующем тике.
+- **Память один тик.** Только предыдущий ответ доступен агенту.
