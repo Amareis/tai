@@ -28,7 +28,7 @@ This runs `command` in a window titled `window_title`. If the window doesn't exi
 |------|--------|---------|
 | **text** (default) | `` ```title\ncommand\n``` `` | Run command in window. If window doesn't exist, create it with a shell and send command. |
 | **close** | `` ```title:close\n``` `` | Close the named window. Removes it from the session. |
-| **write** | `` ```path:write<<DELIM\ncontent\nDELIM\n``` `` | Write content directly to a file. Bypasses shell entirely — no escaping issues, no encoding corruption. |
+| **write** | `` ```path:write<<DELIM\ncontent\nDELIM\n``` `` | Write content directly to a file. Bypasses shell entirely — no escaping issues, no encoding corruption. After writing, the file is automatically opened in a viewer window with line numbers (`cat -n`). |
 
 ### Window Title Rules
 
@@ -40,9 +40,43 @@ This runs `command` in a window titled `window_title`. If the window doesn't exi
 
 **ALWAYS use `:write<<DELIM` for file writes.** Never use `cat` heredocs through shell — the `:write` mode bypasses the terminal entirely, avoiding all escaping and encoding issues.
 
+After a successful write, the file is automatically opened in a viewer window with line numbers. You can then edit it using `ed` or `sed` in a new window — refer to line numbers from the viewer.
+
 Example:
 ```
 ```config.yaml:write<<EOF
 server:
   port: 8080
   host: localhost
+EOF
+```
+```
+
+### Editing Files
+
+To edit an existing file, use `ed` (line editor) or `sed` in a text block. The viewer window shows line numbers via `cat -n`, so you can reference exact lines.
+
+Example — delete line 5 and replace line 10:
+```
+```edit
+ed src/main.rs <<'ED'
+5d
+10c
+fn new_line() -> i32 { 42 }
+.
+w
+q
+ED
+```
+```
+
+Example — simple substitution:
+```
+```edit
+sed -i '' 's/old_text/new_text/' src/main.rs
+```
+```
+
+### Ending the Session
+
+**Closing ALL windows ends the session.** When your task is complete, close every window — the system will exit automatically. This is the only way to stop.

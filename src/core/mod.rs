@@ -207,9 +207,18 @@ pwd && tree --gitignore
             },
             BlockMode::Write => {
                 let result = Self::execute_file_write(title, content);
+                let ok = !result.contains("Error:");
+                let window_id = if ok {
+                    let view_title = std::path::Path::new(title)
+                        .file_name()
+                        .map_or(title.to_string(), |n| n.to_string_lossy().to_string());
+                    self.launch_and_send(&view_title, &format!("cat -n {title}")).await.ok()
+                } else {
+                    None
+                };
                 ExecutedBlock {
                     title: title.to_string(),
-                    window_id: None,
+                    window_id,
                     mode: *mode,
                     result: Some(result),
                 }
