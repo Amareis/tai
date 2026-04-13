@@ -200,17 +200,45 @@ fn render_result_user(view: &TrackedView) -> ChatCompletionRequestMessage {
     ChatCompletionRequestUserMessage::from(body).into()
 }
 
+fn estimate_tokens(text: &str) -> usize {
+    text.len().div_ceil(4)
+}
+
 fn render_dashboard(state: &State) -> ChatCompletionRequestMessage {
     let mut body = String::from("== Windows ==\n");
+    let mut total_tokens: usize = estimate_tokens(&state.system);
+
     for view in &state.tracked {
         let lines = view.output.lines().count();
+        let tokens = estimate_tokens(&view.output);
+        total_tokens += tokens;
         let mode = if view.rerun { "view" } else { "exec" };
         let status = if view.rerun { "rerun" } else { "cached" };
         let _ = std::fmt::Write::write_fmt(
             &mut body,
-            format_args!("{}: {} lines, {} ({})\n", view.title, lines, mode, status),
+            format_args!(
+                "{}: {} lines (~{} tok), {} ({})\n",
+                view.title, lines, tokens, mode, status
+            ),
         );
     }
-    let _ = std::fmt::Write::write_fmt(&mut body, format_args!("\n== Tick #{} ==", state.tick_n));
+
+    if let Some(prev) = &state.previous_response {
+        total_tokens += estimate_tokens(&prev.reasoning);
+        for seg in &prev.segments {
+            total_tokens += estimate_tokens(&seg.content);
+            if let Some(prose) = &seg.prose {
+                total_tokens += estimate_tokens(prose);
+            }
+        }
+        if let Some(outro) = &prev.outro {
+            total_tokens += estimate_tokens(outro);
+        }
+    }
+
+    let _ = std::fmt::Write::write_fmt(
+        &mut body,
+        format_args!("\n== Context: ~{total_tokens} tokens | Tick #{} ==", state.tick_n),
+    );
     ChatCompletionRequestUserMessage::from(body).into()
 }

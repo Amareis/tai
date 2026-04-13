@@ -5,7 +5,7 @@ pub mod state;
 pub mod response;
 pub mod types;
 
-use crate::agent::{Agent, LlmAgent};
+use crate::agent::{Agent, AgentResponse, LlmAgent};
 use crate::core::Server;
 use std::env;
 use tracing::error;
@@ -20,7 +20,7 @@ pub fn create_server(
 
 pub async fn run_server(
     debug: bool,
-    initial: &[(&str, &str)],
+    initial: Option<AgentResponse>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("tai=info".parse()?))

@@ -136,6 +136,16 @@ Wait for the next tick's execution results before drawing conclusions about
 what happened. Do NOT assume a command succeeded or failed based on having
 written it — only the actual output in the next tick tells you the result.
 
+## Conserving Context
+
+Your context window has limited capacity (around 100_000 tokens). The dashboard shows approximate token usage per window and total. To avoid running out of context:
+
+- **Close windows when done**: After extracting the information you need, close the window.
+- **Summarize into mind.md**: Before closing a window with important findings, save them in mind.md.
+- **Prefer targeted reads**: Use `head -20`, `tail -30`, or `sed -n '5,15p'` instead of `cat` for large files.
+- **Avoid duplication**: Don't open multiple windows showing the same content.
+- **Watch the dashboard**: If total tokens are getting high, close unnecessary windows before opening new ones.
+
 ## Mind — Persistent Working Memory
 
 A special window called **mind** is loaded at startup from `mind.md`. This is your

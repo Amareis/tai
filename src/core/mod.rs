@@ -54,25 +54,14 @@ impl Server {
         self.tracked.len()
     }
 
-    pub async fn run(&mut self, initial: &[(&str, &str)]) -> Result<(), CoreError> {
+    pub async fn run(&mut self, initial: Option<AgentResponse>) -> Result<(), CoreError> {
         info!("run: starting server");
         std::fs::create_dir_all(&self.debug_dir).ok();
 
-        let segments: Vec<ParsedBlock> = initial
-            .iter()
-            .map(|(title, cmd)| ParsedBlock {
-                window: title.to_string(),
-                mode: BlockMode::View,
-                content: cmd.to_string(),
-                prose: None,
-            })
-            .collect();
-        self.apply_segments_sorted(&segments);
-        self.last_tick = Some(AgentResponse {
-            reasoning: String::new(),
-            segments,
-            outro: None,
-        });
+        if let Some(resp) = initial {
+            self.apply_segments_sorted(&resp.segments);
+            self.last_tick = Some(resp);
+        }
 
         info!("run: entering tick loop");
         loop {
