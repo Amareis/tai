@@ -305,7 +305,7 @@ pwd && tree --gitignore
             debug!("rerun_watch_windows: sending to '{title}' (id={id})");
             let send_cmd = SendTextCmd {
                 window: id.clone(),
-                text: vec![format!("reset && {command}\n")],
+                text: vec![format!("clear && {command}\n")],
             };
             if let Err(e) = self.back.execute(BackendCmd::Send(send_cmd)).await {
                 warn!("rerun_watch_windows: send-text error for '{title}' (id={id}): {e}");

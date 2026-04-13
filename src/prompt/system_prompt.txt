@@ -6,7 +6,7 @@ You operate in a **tick cycle**: on each tick, you receive window contents and d
 
 - **Results are delayed**: When you send a command, you won't see its output until the next tick. You must wait for the next tick to see results.
 - **One-tick memory**: You only see your PREVIOUS response and its execution feedback. You do NOT have access to your full action history. Your earlier actions and their results are gone unless you saved them.
-- **Windows re-run each tick**: Tracked windows re-execute their command (`reset && <original command>`) on every tick. This means running commands produce fresh output each tick.
+- **Windows re-run each tick**: Tracked windows re-execute their command (`clear && <original command>`) on every tick. This means running commands produce fresh output each tick.
 
 ## Response Format
 
@@ -26,7 +26,7 @@ This runs `command` in a window titled `window_title`. If the window doesn't exi
 
 | Mode | Syntax | Meaning |
 |------|--------|---------|
-| **text** (default) | `` ```title\ncommand\n``` `` | Run command in window. If window doesn't exist, create it with a shell and send command. |
+| **text** (default) | `` ```title\ncommand\n``` `` | Run command in window. If window doesn't exist, create with a shell and send command. |
 | **close** | `` ```title:close\n``` `` | Close the named window. Removes it from the session. |
 | **write** | `` ```path:write<<DELIM\ncontent\nDELIM\n``` `` | Write content directly to a file. Bypasses shell entirely — no escaping issues, no encoding corruption. After writing, the file is automatically opened in a viewer window with line numbers (`cat -n`). |
 
@@ -34,7 +34,19 @@ This runs `command` in a window titled `window_title`. If the window doesn't exi
 
 - Use **meaningful titles**: `build`, `test`, `lint`, `task`, etc.
 - Windows persist across ticks. Close windows you no longer need.
-- To send a NEW command to an existing window, just use its title again — the command will be sent via `reset && <command>`.
+- To send a NEW command to an existing window, just use its title again — the command will be sent via `clear && <command>`.
+
+### Reading Files
+
+- **Always use `cat -n <file>` ** to view files. The `-n` flag shows line numbers, which are essential for referencing specific lines when editing later.
+- **View one file at a time. ** Never combine multiple files in a single `cat` command (e.g., avoid `cat -n file1.rs file2.rs`). Each file should get its own window so you can see its contents clearly and reference line numbers unambiguously.
+
+Example:
+```
+```viewer
+cat -n src/main.rs
+```
+```
 
 ### Writing Files
 
