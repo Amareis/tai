@@ -11,6 +11,9 @@ use tracing::{debug, info};
 struct TrackedCmd {
     title: String,
     command: String,
+    rerun: bool,
+    cached_output: Option<String>,
+    cached_exit: Option<i32>,
 }
 
 #[derive(Debug, Error)]
@@ -61,7 +64,7 @@ impl Server {
             .iter()
             .map(|(title, cmd)| ParsedSegment::Block {
                 window: title.to_string(),
-                mode: BlockMode::Text,
+                mode: BlockMode::View,
                 content: cmd.to_string(),
             })
             .collect();
@@ -132,28 +135,33 @@ impl Server {
                         self.tracked.retain(|tc| tc.title != *window);
                         info!("apply: '{window}' closed");
                     }
-                    BlockMode::Text => {
-                        self.tracked.push(TrackedCmd {
-                            title: window.clone(),
-                            command: content.clone(),
-                        });
-                        info!("apply: '{window}' tracked");
+                    BlockMode::View => {
+                        self.upsert_tracked(window.clone(), content.clone(), true);
+                        info!("apply: '{window}' tracked (view)");
                     }
-                    BlockMode::Write => {
-                        let result = Self::execute_file_write(window, content);
-                        info!("apply: write '{window}' → {result}");
-                        if !result.contains("Error:") {
-                            let view_title = std::path::Path::new(window)
-                                .file_name()
-                                .map_or(window.clone(), |n| n.to_string_lossy().to_string());
-                            self.tracked.push(TrackedCmd {
-                                title: view_title,
-                                command: format!("cat -n {window}"),
-                            });
-                        }
+                    BlockMode::Exec => {
+                        self.upsert_tracked(window.clone(), content.clone(), false);
+                        info!("apply: '{window}' tracked (exec)");
                     }
                 }
             }
+        }
+    }
+
+    fn upsert_tracked(&mut self, title: String, command: String, rerun: bool) {
+        if let Some(existing) = self.tracked.iter_mut().find(|tc| tc.title == title) {
+            existing.command = command;
+            existing.rerun = rerun;
+            existing.cached_output = None;
+            existing.cached_exit = None;
+        } else {
+            self.tracked.push(TrackedCmd {
+                title,
+                command,
+                rerun,
+                cached_output: None,
+                cached_exit: None,
+            });
         }
     }
 
@@ -163,35 +171,24 @@ impl Server {
         }
 
         let mut views = Vec::with_capacity(self.tracked.len());
-        for tc in &self.tracked {
-            debug!("run_tracked: '{}' cmd={}", tc.title, tc.command);
-            let output = self.back.run(&tc.title, &tc.command).await;
+        for tc in &mut self.tracked {
+            if tc.rerun || tc.cached_output.is_none() {
+                debug!("run_tracked: '{}' executing cmd={}", tc.title, tc.command);
+                let output = self.back.run(&tc.title, &tc.command).await;
+                tc.cached_output = Some(output.stdout);
+                tc.cached_exit = Some(output.exit_code);
+            } else {
+                debug!("run_tracked: '{}' using cached output", tc.title);
+            }
+
             views.push(TrackedView {
                 title: tc.title.clone(),
-                output: output.stdout,
-                exit_code: output.exit_code,
+                output: tc.cached_output.clone().unwrap_or_default(),
+                exit_code: tc.cached_exit.unwrap_or(0),
             });
         }
 
         views
-    }
-
-    fn execute_file_write(path: &str, content: &str) -> String {
-        info!("execute_file_write: writing {} bytes to '{path}'", content.len());
-        let file_path = std::path::Path::new(path);
-        if let Some(parent) = file_path.parent()
-            && !parent.as_os_str().is_empty()
-            && let Err(e) = std::fs::create_dir_all(parent)
-        {
-            return format!("[{path}] Error: mkdir failed: {e}");
-        }
-        match std::fs::write(path, content) {
-            Ok(()) => {
-                let bytes = content.len();
-                format!("[{path}] {bytes} bytes written")
-            }
-            Err(e) => format!("[{path}] Error: write failed: {e}"),
-        }
     }
 
     async fn debug_wait(&self, point: &str) {

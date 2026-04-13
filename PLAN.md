@@ -69,62 +69,33 @@
 - [x] `Server::accept(back, session, agent, listener)` — всё приходит снаружи
 - [x] E2E тест: `tick_empty_session` — пустая сессия, TestAgent проверяет структуру промпта ✅
 
-#### Осталось (TDD — тест уже написан, падает):
+#### В процессе: Text→View, Write→Exec, уникальность title, кеш для exec
 
-Единый принцип: **Server никогда не мутирует session напрямую**. Все изменения окон — через watcher.
+- [ ] `types.rs`: `BlockMode::Text` → `View`, `BlockMode::Write` → `Exec`, FromStr/Display
+- [ ] `response/mod.rs`: убрать `heredoc_delim` из Header, убрать парсинг `<<DELIM` из `parse_block_header`, убрать `extract_heredoc_delimiter`, убрать `initial_heredoc` из `parse_block_body`, обновить тесты
+- [ ] `core/mod.rs`: `TrackedCmd { title, command, rerun, cached_output, cached_exit }`, `upsert_tracked`, `apply_segments` (View/Exec/Close), `run_tracked` с кешем, убрать `execute_file_write`, удалить `utils.rs`
+- [ ] `agent/llm.rs`: `Write` → `Exec`, `Text` → `View` в `prompt_to_messages`
+- [ ] `prompt/system_prompt.txt`: переписать секции для view/exec
+- [ ] `tests/server_test.rs`: `Text` → `View`, тесты exec + upsert
+- [ ] cargo test + clippy
 
-Флоу:
-1. Agent → `launch --title foo -- make test` → `execute_block` → backend возвращает `WindowCreated(id)`
-2. `execute_block` → `watcher.track(id, title)` — только регистрирует, session не трогает
-3. Watcher (background task) владеет `Arc<Mutex<Session>>` + backend:
-   - Поллит kitty (`List` + `Get`) периодически
-   - При первом poll нового id: создаёт `Window::new_active`, добавляет в session, focused
-   - При exit (detected through `last_cmd_exit_status` в get-text): читает финальный контент → `Active → Frozen` в session → шлёт `WindowExited` сигнал
-4. Watcher сигнализирует через `tokio::sync::mpsc`:
-   - `WatchEvent::WindowExited(window_id, exit_code)` — основной триггер
-   - `WatchEvent::WindowOutput(window_id)` — опционально для MVP
-5. Server event loop:
-   ```rust
-   loop {
-       select! {
-           event = watcher_rx.recv() => { tick(event).await }
-           line = client.read_line() => { handle_user_input(line) }
-       }
-   }
-   ```
-   TickTrigger: `WindowExited(window_id, exit_code)`, `UserMessage(text)`
+#### Следующие задачи
 
-- [ ] **Watcher::track(id, title)** — регистрация нового окна для отслеживания
-- [ ] **Watcher background task** — владеет session + backend, поллит, мутит session
-    - Добавляет Window в session при первом poll
-    - Freeze при exit: `last_cmd_exit_status` из get-text → `Active → Frozen { content, exit_code }`
-    - Шлёт `WatchEvent` через channel
-- [ ] **Server event loop** — `select!` на watcher events + client input
-    - `execute_block` при launch → только `watcher.track()`, не трогает session
-- [ ] **Обёртка команд в bash -c**: kitty корректно показывает `last_cmd_exit_status` только если процесс — bash
-- [ ] **Тест: launch → session tracks** (уже написан, красный)
-- [ ] **Тест: полный lifecycle**: launch → watcher detects exit → freeze → tick показывает frozen окно
-- [ ] Doc-комментарии
+- [ ] Тест: полный lifecycle с реальным LLM
+- [ ] Рассмотреть полезность `last_tick` (previous_response) в промпте
+- [ ] Убрать `TestAgent` если не работает с новым Prompt
+- [ ] Agent reasoning сохранять в debug
 
 ### Phase 5: Snapshot Tests
 
-Цель: сервер тестируется с реальным Kitty, мокается только Agent. Снепшоты = что видит модель на каждом шаге.
+Цель: сервер тестируется с реальным бэкендом, мокается только Agent. Снепшоты = что видит модель на каждом шаге.
 
 - [ ] Обновить TestAgent для работы с insta снепшотами
 - [ ] Test harness: `tests/harness.rs`
 - [ ] Snapshot tests (insta + toml)
 - [ ] **Checkpoint**: `cargo test` зелёные, `cargo insta review` — читаемые TOML снепшоты
 
-### Phase 6: Window Lifecycle (full)
-
-Цель: полноценное управление окнами — focus, unfocus, archive.
-
-- [ ] Focus/unfocus: управление какие окна в "контексте"
-- [ ] Archive: frozen → archived (не в контексте, не в RAM)
-- [ ] `windows` команда — список с состояниями
-- [ ] Тесты
-
-### Phase 7: Prompt Assembly (full)
+### Phase 6: Prompt Assembly (full)
 
 Цель: слои, бюджет, layout trait, references.
 
@@ -133,43 +104,10 @@
 - [ ] `prompt/references.rs` — сбор --help/man page
 - [ ] Обновить снепшот тесты
 
-### Phase 8: Real LLM Client
-
-Цель: подключаем реальную модель.
-
-- [ ] `models/l_model.rs` — LLM клиент через llm crate (Claude/GPT API)
-- [ ] Thinking → mind.md
-- [ ] Обработка ошибок, timeout
-
-### Phase 9: TUI Polish
-
-Цель: полноценный интерактивный dashboard.
-
-- [ ] Model Channel polish (ANSI, state header)
-- [ ] User Viewport — Debug UI (windows tab, debug tab, status bar)
-
-### Phase 10: Session Persistence
+### Phase 7: Session Persistence
 
 Цель: перезапуск без потери данных.
 
 - [ ] session.json read/write
 - [ ] frozen content save/load
 - [ ] Graceful shutdown + recovery
-
-## Открытые вопросы
-
-### `keys` command bug
-
-`keys` отправляет символы как текст вместо keypress events. Исследовать позже.
-
-### Stderr routing
-
-Три stderr-потока: kernel, kitty child, window process. См. `ARCHITECTURE.md`.
-
-## S-Models
-
-Лёгкие модели-наблюдатели для свёрнутых окон. Система полностью работает без них.
-
-## IPC / Remote API
-
-Unix socket или HTTP API для внешних клиентов. Когда появится TmuxBackend или remote.

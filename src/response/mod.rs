@@ -1,11 +1,8 @@
 use crate::types::{BlockMode, ParsedSegment};
 
-/// Parsed block header result.
 struct Header {
     window: String,
     mode: BlockMode,
-    /// Heredoc delimiter for :write blocks (from `:write<<DELIM` syntax)
-    heredoc_delim: Option<String>,
 }
 
 #[must_use]
@@ -24,8 +21,7 @@ pub fn parse_response(input: &str) -> Vec<ParsedSegment> {
             let header_start = block_start + 3;
             let (header_end, hdr) = parse_header(input, header_start);
 
-            let (_body_end, close_end, content) =
-                parse_block_body(input, header_end, hdr.heredoc_delim.as_deref());
+            let (_body_end, close_end, content) = parse_block_body(input, header_end);
 
             if !hdr.window.is_empty() {
                 segments.push(ParsedSegment::Block {
@@ -64,14 +60,10 @@ fn parse_header(input: &str, from: usize) -> (usize, Header) {
     (end, header)
 }
 
-fn parse_block_body(
-    input: &str,
-    from: usize,
-    initial_heredoc: Option<&str>,
-) -> (usize, usize, String) {
+fn parse_block_body(input: &str, from: usize) -> (usize, usize, String) {
     let mut pos = from;
     let mut content = String::new();
-    let mut heredoc_delim: Option<String> = initial_heredoc.map(String::from);
+    let mut heredoc_delim: Option<String> = None;
 
     while pos < input.len() {
         if let Some(ref delim) = heredoc_delim {
@@ -120,42 +112,17 @@ fn parse_block_body(
 }
 
 fn parse_block_header(header: &str) -> Header {
-    // First extract heredoc delimiter for :write<<DELIM
-    let (header_without_delim, heredoc_delim) = if let Some(arrow_pos) = header.find("<<") {
-        let before = &header[..arrow_pos];
-        let delim_raw = &header[arrow_pos + 2..];
-        // Validate that before<< actually makes sense (must have :write)
-        if before.ends_with(":write") {
-            let delim = delim_raw.trim().to_string();
-            if delim.is_empty() {
-                (header.to_string(), None)
-            } else {
-                (before.to_string(), Some(delim))
-            }
-        } else {
-            (header.to_string(), None)
-        }
-    } else {
-        (header.to_string(), None)
-    };
-
-    // Then parse window:mode from the remaining header
-    if let Some(pos) = header_without_delim.rfind(':') {
-        let window = header_without_delim[..pos].to_string();
-        let mode_str = &header_without_delim[pos + 1..];
+    if let Some(pos) = header.rfind(':') {
+        let window = header[..pos].to_string();
+        let mode_str = &header[pos + 1..];
         if let Ok(mode) = mode_str.parse::<BlockMode>() {
-            return Header {
-                window,
-                mode,
-                heredoc_delim,
-            };
+            return Header { window, mode };
         }
     }
 
     Header {
         window: header.to_string(),
-        mode: BlockMode::Text,
-        heredoc_delim: None,
+        mode: BlockMode::View,
     }
 }
 
@@ -206,7 +173,7 @@ mod tests {
         assert!(matches!(
             &segments[1],
             ParsedSegment::Block { window, mode, content }
-            if window == "build" && *mode == BlockMode::Text && content == "cargo build"
+            if window == "build" && *mode == BlockMode::View && content == "cargo build"
         ));
         assert!(matches!(&segments[2], ParsedSegment::Prose(_)));
     }
@@ -269,7 +236,7 @@ mod tests {
         assert!(matches!(
             &segments[0],
             ParsedSegment::Block { window, mode, content }
-            if window == "build" && *mode == BlockMode::Text && content == "cargo test"
+            if window == "build" && *mode == BlockMode::View && content == "cargo test"
         ));
     }
 
@@ -289,33 +256,23 @@ mod tests {
     fn test_parse_header_with_mode() {
         let h = parse_block_header("build");
         assert_eq!(h.window, "build");
-        assert_eq!(h.mode, BlockMode::Text);
-        assert!(h.heredoc_delim.is_none());
+        assert_eq!(h.mode, BlockMode::View);
 
         let h = parse_block_header("build:close");
         assert_eq!(h.window, "build");
         assert_eq!(h.mode, BlockMode::Close);
 
-        let h = parse_block_header("build:text");
+        let h = parse_block_header("build:view");
         assert_eq!(h.window, "build");
-        assert_eq!(h.mode, BlockMode::Text);
+        assert_eq!(h.mode, BlockMode::View);
 
         let h = parse_block_header("my-window:close");
         assert_eq!(h.window, "my-window");
         assert_eq!(h.mode, BlockMode::Close);
-    }
 
-    #[test]
-    fn test_parse_header_write_with_delim() {
-        let h = parse_block_header("RESULT.md:write<<EOF");
-        assert_eq!(h.window, "RESULT.md");
-        assert_eq!(h.mode, BlockMode::Write);
-        assert_eq!(h.heredoc_delim.as_deref(), Some("EOF"));
-
-        let h = parse_block_header("src/lib.rs:write<<END");
-        assert_eq!(h.window, "src/lib.rs");
-        assert_eq!(h.mode, BlockMode::Write);
-        assert_eq!(h.heredoc_delim.as_deref(), Some("END"));
+        let h = parse_block_header("install:exec");
+        assert_eq!(h.window, "install");
+        assert_eq!(h.mode, BlockMode::Exec);
     }
 
     #[test]
@@ -351,7 +308,7 @@ mod tests {
         assert!(matches!(
             &segments[1],
             ParsedSegment::Block { window, mode, content }
-            if window == "build" && *mode == BlockMode::Text && content == "cargo build"
+            if window == "build" && *mode == BlockMode::View && content == "cargo build"
         ));
     }
 
@@ -442,54 +399,55 @@ cat src/main.rs
     }
 
     #[test]
-    fn test_write_block_basic() {
-        let text = "```RESULT.md:write<<EOF\nhello world\nEOF\n```";
+    fn test_exec_block_basic() {
+        let text = "```install:exec\ncargo add serde\n```";
         let segments = parse_response(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
             ParsedSegment::Block { window, mode, content }
-            if window == "RESULT.md" && *mode == BlockMode::Write && content == "hello world"
+            if window == "install" && *mode == BlockMode::Exec && content == "cargo add serde"
         ));
     }
 
     #[test]
-    fn test_write_block_multiline() {
-        let text = "```config.toml:write<<DELIM\n[build]\nrelease = true\nDELIM\n```";
-        let segments = parse_response(text);
-        assert_eq!(segments.len(), 1);
-        assert!(matches!(
-            &segments[0],
-            ParsedSegment::Block { window, mode, content }
-            if window == "config.toml" && *mode == BlockMode::Write && content.contains("[build]")
-        ));
-    }
-
-    #[test]
-    fn test_write_block_with_backticks_inside() {
-        let text = "```RESULT.md:write<<EOF\nSome ``` backticks inside\nand more\nEOF\n```";
-        let segments = parse_response(text);
-        assert_eq!(segments.len(), 1);
-        assert!(matches!(
-            &segments[0],
-            ParsedSegment::Block { window, mode, content }
-            if window == "RESULT.md" && *mode == BlockMode::Write && content.contains("``` backticks")
-        ));
-    }
-
-    #[test]
-    fn test_write_block_then_text_block() {
+    fn test_exec_block_with_heredoc_inside() {
         let text =
-            "```config.yaml:write<<END\nkey: value\nEND\n```\n```build\ncat config.yaml\n```";
+            "```write-config:exec\ncat > config.toml << 'EOF'\n[build]\nrelease = true\nEOF\n```";
+        let segments = parse_response(text);
+        assert_eq!(segments.len(), 1);
+        assert!(matches!(
+            &segments[0],
+            ParsedSegment::Block { window, mode, content }
+            if window == "write-config" && *mode == BlockMode::Exec && content.contains("[build]")
+        ));
+    }
+
+    #[test]
+    fn test_exec_block_with_backticks_inside() {
+        let text =
+            "```notes:exec\ncat > notes.md << 'EOF'\nSome ``` backticks inside\nand more\nEOF\n```";
+        let segments = parse_response(text);
+        assert_eq!(segments.len(), 1);
+        assert!(matches!(
+            &segments[0],
+            ParsedSegment::Block { window, mode, content }
+            if window == "notes" && *mode == BlockMode::Exec && content.contains("``` backticks")
+        ));
+    }
+
+    #[test]
+    fn test_exec_block_then_view_block() {
+        let text = "```install:exec\ncargo add serde\n```\n```build\ncargo build\n```";
         let segments = parse_response(text);
         assert_eq!(segments.len(), 2);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { mode, .. } if *mode == BlockMode::Write
+            ParsedSegment::Block { mode, .. } if *mode == BlockMode::Exec
         ));
         assert!(matches!(
             &segments[1],
-            ParsedSegment::Block { mode, .. } if *mode == BlockMode::Text
+            ParsedSegment::Block { mode, .. } if *mode == BlockMode::View
         ));
     }
 }

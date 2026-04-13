@@ -136,13 +136,12 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
                         mode,
                         content,
                     } => {
-                        if *mode == BlockMode::Text && content.is_empty() {
+                        if *mode == BlockMode::View && content.is_empty() {
                             format!("```{window}\n```")
                         } else if *mode == BlockMode::Close {
                             format!("```{window}:close\n```")
-                        } else if *mode == BlockMode::Write {
-                            let delim = "HEREDOC";
-                            format!("```{window}:write<<{delim}\n{content}\n{delim}\n```")
+                        } else if *mode == BlockMode::Exec {
+                            format!("```{window}:exec\n{content}\n```")
                         } else {
                             format!("```{window}\n{content}\n```")
                         }
