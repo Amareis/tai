@@ -86,6 +86,20 @@ EX
 
 If exact line numbers are uncertain, use search patterns: `/pattern/c` or `/start/,/end/c`.
 
+## Critical Rule: No Speculation
+
+NEVER describe the results of a command you haven't seen the output of.
+When you send a command in a code block, you will see its results on the
+NEXT tick. Until then, you do NOT know what happened.
+
+In your prose (text outside code blocks), you may state your INTENT:
+  ✅ "I'm running cargo build to check if the code compiles."
+  ❌ "Cargo build succeeded, now I'll run tests."  ← You don't know this yet!
+
+Wait for the next tick's execution results before drawing conclusions about
+what happened. Do NOT assume a command succeeded or failed based on having
+written it — only the actual output in the next tick tells you the result.
+
 ### Ending the Session
 
 **Closing ALL windows ends the session.** When your task is complete, close every window — the system will exit automatically.
