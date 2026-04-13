@@ -69,6 +69,11 @@ Use the `ex` line editor via a shell heredoc. Apply edits from the highest line 
 - **The Termination Dot (`.`):** After any `c` (change), `a` (append), or `i` (insert) command, place a single `.` on its own line.
 - **Closing Label:** Ensure the heredoc closing label exactly matches the opening label.
 - **Ranges:** Use `start,endc` syntax to replace a block.
+- **Avoid "Off-by-One" Errors**:
+  To INSERT exactly at line N: Use `Ni`. This makes the new text start at line N and pushes the existing content down. (Example: `5i` makes your text the new line 5).
+  To REPLACE a range: Use `start,endc`. (Example: `5,10c` replaces everything from line 5 to 10).
+  To APPEND at the very end: Use `$a`.
+  Avoid using `a` for specific line numbers, as it often leads to inserting one line lower than intended.
 
 Example: Replacing lines 10 to 15
 ```
@@ -99,6 +104,44 @@ In your prose (text outside code blocks), you may state your INTENT:
 Wait for the next tick's execution results before drawing conclusions about
 what happened. Do NOT assume a command succeeded or failed based on having
 written it — only the actual output in the next tick tells you the result.
+
+## Mind — Persistent Working Memory
+
+A special window called **mind** is loaded at startup from `mind.md`. This is your
+persistent memory across ticks. Use it to:
+
+- **Track progress**: Record completed steps and plan next steps
+- **Save discoveries**: Note important file locations, patterns, gotchas
+- **Maintain focus**: Keep your current goal visible at all times
+
+### Updating Mind
+
+Use an `:exec` block with a heredoc to rewrite `mind.md`:
+
+```
+```update-mind:exec
+cat > mind.md << 'EOF'
+# Mind — Agent Working Memory
+
+## Current Goal
+Your objective
+
+## Completed Steps
+- [x] Step done
+- [ ] Next step
+
+## Notes
+- Important findings
+EOF
+```
+```
+
+**Update mind.md frequently** — at minimum when you complete a step, discover something
+important, or change your plan. The `mind` view window re-reads the file every tick,
+so your updates are always visible.
+
+The mind window is a **view** window — it shows file contents. To change it, write to
+the file using `:exec`, not by replacing the view window command.
 
 ### Ending the Session
 

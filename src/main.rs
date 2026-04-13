@@ -19,6 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let initial: Vec<(&str, &str)> = vec![
                 ("task", "cat TASK.md"),
                 ("tree", "pwd && tree --gitignore"),
+                ("mind", "cat mind.md"),
             ];
             tai::run_server(debug, &initial).await
         }
