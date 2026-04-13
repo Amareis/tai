@@ -14,13 +14,13 @@ use tracing_subscriber::EnvFilter;
 pub fn create_server(
     agent: Box<dyn Agent>,
 ) -> Result<Server, Box<dyn std::error::Error>> {
-    let log_dir = std::path::PathBuf::from("tai-debug");
-    let back = Box::new(backend::local::LocalBackend::new(log_dir));
+    let back = Box::new(backend::local::LocalBackend::new());
     Ok(Server::new(back, agent))
 }
 
 pub async fn run_server(
     debug: bool,
+    initial: &[(&str, &str)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("tai=info".parse()?))
@@ -30,7 +30,7 @@ pub async fn run_server(
     agent.debug = debug;
     let mut server = create_server(agent)?;
     server.debug = debug;
-    if let Err(e) = server.run().await {
+    if let Err(e) = server.run(initial).await {
         error!("Server run error: {}", e);
     }
     Ok(())

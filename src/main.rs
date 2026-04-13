@@ -16,7 +16,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli {
         Cli::Server { debug } => {
             dotenv::dotenv().ok();
-            tai::run_server(debug).await
+            let initial: Vec<(&str, &str)> = vec![
+                ("task", "cat TASK.md"),
+                ("tree", "pwd && tree --gitignore"),
+            ];
+            tai::run_server(debug, &initial).await
         }
     }
 }

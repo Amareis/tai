@@ -14,21 +14,15 @@ pub struct Prompt {
     pub system: String,
     pub tracked: Vec<TrackedView>,
     pub previous_response: Option<AgentResponse>,
-    pub execution_feedback: Option<String>,
 }
 
 impl Prompt {
     #[must_use]
-    pub fn build(
-        tracked: Vec<TrackedView>,
-        previous_response: Option<AgentResponse>,
-        execution_feedback: Option<String>,
-    ) -> Self {
+    pub fn build(tracked: Vec<TrackedView>, previous_response: Option<AgentResponse>) -> Self {
         Self {
             system: SYSTEM_PROMPT.to_string(),
             tracked,
             previous_response,
-            execution_feedback,
         }
     }
 }

@@ -14,8 +14,7 @@ fn assert_test_agent(server: &Server) {
 }
 
 fn test_backend() -> LocalBackend {
-    let log_dir = std::env::temp_dir().join(format!("tai-test-{}", uuid::Uuid::new_v4()));
-    LocalBackend::new(log_dir)
+    LocalBackend::new()
 }
 
 #[tokio::test]
@@ -70,12 +69,17 @@ async fn close_removes_from_tracked() {
         .add_step(
             |_prompt: &Prompt| {},
             AgentResponse::block("build", BlockMode::Close, ""),
+        )
+        .add_step(
+            |_prompt: &Prompt| {},
+            AgentResponse::empty(),
         );
 
     let mut server = Server::new(Box::new(test_backend()), Box::new(agent));
-    server.tick().await.unwrap();
+    server.tick().await.unwrap(); // text → pending
+    server.tick().await.unwrap(); // apply text, close → pending
     assert_eq!(server.tracked_count(), 1);
-    server.tick().await.unwrap();
+    server.tick().await.unwrap(); // apply close
     assert_eq!(server.tracked_count(), 0);
 
     assert_test_agent(&server);

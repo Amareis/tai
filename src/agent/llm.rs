@@ -154,13 +154,6 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
         ms.push(ChatCompletionRequestAssistantMessage::from(parts.join("\n")).into());
     }
 
-    if let Some(feedback) = &prompt.execution_feedback {
-        ms.push(
-            ChatCompletionRequestUserMessage::from(format!("## Execution results\n{feedback}"))
-                .into(),
-        );
-    }
-
     ms
 }
 

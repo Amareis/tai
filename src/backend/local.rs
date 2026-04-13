@@ -1,19 +1,20 @@
-use std::path::PathBuf;
-
 use async_trait::async_trait;
 use tracing::{debug, warn};
 
 use super::{Backend, CmdOutput};
 
-pub struct LocalBackend {
-    log_dir: PathBuf,
+pub struct LocalBackend;
+
+impl Default for LocalBackend {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LocalBackend {
     #[must_use]
-    pub fn new(log_dir: PathBuf) -> Self {
-        std::fs::create_dir_all(&log_dir).ok();
-        Self { log_dir }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -22,26 +23,17 @@ impl Backend for LocalBackend {
     async fn run(&self, title: &str, command: &str) -> CmdOutput {
         debug!("run: executing '{title}': {command}");
         let full_script = format!("set -ex -o pipefail;\n{command}");
-        let log_dir = self.log_dir.clone();
-        let title_owned = title.to_string();
 
         let result = tokio::task::spawn_blocking(move || {
-            let result = duct::cmd!("bash", "-c", &full_script)
+            match duct::cmd!("bash", "-c", &full_script)
                 .stderr_to_stdout()
                 .stdout_capture()
                 .unchecked()
-                .run();
-
-            match result {
+                .run()
+            {
                 Ok(output) => {
                     let exit_code = output.status.code().unwrap_or(1);
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
-                    let log_path = log_dir.join(format!("{title_owned}.log"));
-                    if let Err(e) = std::fs::write(&log_path, &stdout) {
-                        warn!("run: failed to write log {log_path:?}: {e}");
-                    }
-
                     CmdOutput { exit_code, stdout }
                 }
                 Err(e) => CmdOutput {
