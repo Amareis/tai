@@ -1,10 +1,9 @@
 #![cfg(test)]
 
-use std::time::Duration;
 use tai::agent::{AgentResponse, TestAgent};
 use tai::types::BlockMode;
 use tai::core::Server;
-use tai::create_server;
+use tai::backend::local::LocalBackend;
 use tai::prompt::Prompt;
 use tracing_test::traced_test;
 
@@ -14,18 +13,20 @@ fn assert_test_agent(server: &Server) {
         .expect("expected TestAgent").assert_all_consumed();
 }
 
+fn test_backend() -> LocalBackend {
+    let log_dir = std::env::temp_dir().join(format!("tai-test-{}", uuid::Uuid::new_v4()));
+    LocalBackend::new(log_dir)
+}
+
 #[tokio::test]
 #[traced_test]
 async fn tick_empty_session() {
     let agent = TestAgent::new().add_step(
-        |prompt: &Prompt| {
-            assert_eq!(prompt.dashboard.len(), 1);
-            assert_eq!(prompt.focused_windows.len(), 1);
-        },
+        |_prompt: &Prompt| {},
         AgentResponse::empty(),
     );
 
-    let mut server = create_server(None, Box::new(agent), true).await.unwrap();
+    let mut server = Server::new(Box::new(test_backend()), Box::new(agent));
     server.tick().await.unwrap();
 
     assert_test_agent(&server);
@@ -33,12 +34,10 @@ async fn tick_empty_session() {
 
 #[tokio::test]
 #[traced_test]
-async fn tick_agent_launches_window_and_session_tracks_it() {
+async fn tick_agent_runs_command() {
     let agent = TestAgent::new()
         .add_step(
-            |prompt: &Prompt| {
-                assert_eq!(prompt.dashboard.len(), 1);
-            },
+            |_prompt: &Prompt| {},
             AgentResponse::block(
                 "build",
                 BlockMode::Text,
@@ -47,19 +46,37 @@ async fn tick_agent_launches_window_and_session_tracks_it() {
         )
         .add_step(
             |prompt: &Prompt| {
-                assert!(
-                    prompt.dashboard.len() >= 2,
-                    "expected at least 2 windows, got {}",
-                    prompt.dashboard.len(),
-                );
+                let found = prompt.tracked.iter().any(|v| v.output.contains("marker-xyz"));
+                assert!(found, "expected marker-xyz in tracked output, got: {:?}", prompt.tracked);
             },
-            AgentResponse::empty(),
+            AgentResponse::block("build", BlockMode::Close, ""),
         );
 
-    let mut server = create_server(None, Box::new(agent), true).await.unwrap();
+    let mut server = Server::new(Box::new(test_backend()), Box::new(agent));
     server.tick().await.unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
     server.tick().await.unwrap();
+
+    assert_test_agent(&server);
+}
+
+#[tokio::test]
+#[traced_test]
+async fn close_removes_from_tracked() {
+    let agent = TestAgent::new()
+        .add_step(
+            |_prompt: &Prompt| {},
+            AgentResponse::block("build", BlockMode::Text, "echo hello"),
+        )
+        .add_step(
+            |_prompt: &Prompt| {},
+            AgentResponse::block("build", BlockMode::Close, ""),
+        );
+
+    let mut server = Server::new(Box::new(test_backend()), Box::new(agent));
+    server.tick().await.unwrap();
+    assert_eq!(server.tracked_count(), 1);
+    server.tick().await.unwrap();
+    assert_eq!(server.tracked_count(), 0);
 
     assert_test_agent(&server);
 }

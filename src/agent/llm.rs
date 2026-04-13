@@ -1,5 +1,5 @@
 use super::{Agent, AgentError, AgentResponse};
-use crate::prompt::{Prompt, WindowView};
+use crate::prompt::{Prompt, TrackedView};
 use crate::response::parse_response;
 use crate::types::{BlockMode, ParsedSegment};
 use async_openai::error::OpenAIError;
@@ -116,8 +116,8 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
     let mut ms: Vec<ChatCompletionRequestMessage> =
         vec![ChatCompletionRequestSystemMessage::from(prompt.system.clone()).into()];
 
-    for w in &prompt.focused_windows {
-        ms.push(render_window(w));
+    for view in &prompt.tracked {
+        ms.push(render_tracked(view));
     }
 
     if let Some(prev) = &prompt.previous_response {
@@ -161,39 +161,16 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
         );
     }
 
-    ms.push(render_dashboard(prompt));
-
     ms
 }
 
-fn render_dashboard(prompt: &Prompt) -> ChatCompletionRequestMessage {
-    let mut lines = vec!["## Dashboard".to_string()];
-
-    if prompt.dashboard.is_empty() {
-        lines.push("No windows.".to_string());
+fn render_tracked(view: &TrackedView) -> ChatCompletionRequestMessage {
+    let trimmed = view.output.trim();
+    let body = if trimmed.is_empty() {
+        format!("(empty, exit {})", view.exit_code)
     } else {
-        lines.push(format!("Opened {} terminals: ", { prompt.dashboard.len() }));
-        lines.extend(prompt.dashboard.iter().map(|w| {
-            format!(
-                "id {} | {} | pid {} | prompt: {}",
-                w.id, w.title, w.pid, w.is_at_prompt
-            )
-        }));
-    }
-    ChatCompletionRequestUserMessage::from(lines.join("\n")).into()
-}
-
-fn render_window(w: &WindowView) -> ChatCompletionRequestMessage {
-    let exit_info = w
-        .exit_code
-        .map_or(String::new(), |c| format!("\n**Exit code: {c}**"));
-    ChatCompletionRequestUserMessage::from(format!(
-        "## Window [{}] {} (focused)\n{}{}\n```\n{}\n```",
-        w.id,
-        w.title,
-        exit_info,
-        if exit_info.is_empty() { "" } else { "\n" },
-        w.content.trim()
-    ))
-    .into()
+        format!("exit {}\n```\n{}\n```", view.exit_code, trimmed)
+    };
+    ChatCompletionRequestUserMessage::from(format!("## [{title}]\n{body}", title = view.title, body = body))
+        .into()
 }
