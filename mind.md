@@ -1,22 +1,38 @@
 # Mind — Agent Working Memory
 
+> This file is your persistent memory across ticks. Update it regularly to track
+> progress, record findings, and plan next steps. It reloads every tick.
+
 ## Current Goal
-Write testing.md — a comprehensive test plan for the TAI codebase, verifying the plan.md implementation.
+(Describe your current objective here)
 
 ## Completed Steps
-- [x] Read all source files to understand the codebase
-- [x] Read AGENTS.md, plan.md, system_prompt.txt
-- [x] Analyzed what's implemented vs what plan describes
-- [x] Designed testing plan covering: prompt_to_messages, core server, backend, edge cases
-- [x] Written testing.md with prioritized test cases
-
-## Findings & Notes
-- plan.md is FULLY IMPLEMENTED: alternating messages, dashboard, prose grouping, rerun field
-- response/mod.rs has ~20 unit tests already — very thorough
-- server_test.rs has 5 E2E tests with TestAgent
-- KEY GAP: prompt_to_messages in llm.rs has ZERO tests — this is the core new logic
-- Backend (local.rs) has NO tests
-- Need pub(crate) or in-module tests for prompt_to_messages
+- [ ] (Track what you've done)
 
 ## Next Steps
-- [ ] Implement the tests from testing.md (if user asks)
+- [ ] (Plan what to do next, in order)
+
+## Findings & Notes
+- (Record important discoveries, file locations, patterns, gotchas)
+
+## Blockers / Open Questions
+- (Track anything unresolved)
+
+## How to Update Mind
+
+Use an `:exec` block with a heredoc to rewrite this file:
+
+```
+```update-mind:exec
+cat > mind.md << 'EOF'
+# Mind — Agent Working Memory
+... updated content ...
+EOF
+```
+```
+
+Update mind.md whenever you:
+- Complete a significant step
+- Discover something important
+- Change your plan
+- Hit a blocker

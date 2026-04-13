@@ -1,6 +1,6 @@
 use crate::agent::{Agent, AgentResponse};
 use crate::backend::Backend;
-use crate::prompt::{Prompt, TrackedView};
+use crate::state::{State, TrackedView};
 use crate::types::{BlockMode, ParsedBlock};
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -101,12 +101,12 @@ impl Server {
         self.debug_write_views(&tracked_views);
 
         let prev_response = self.last_tick.take();
-        let prompt = Prompt::build(tracked_views, prev_response, self.tick_n);
-        info!("tick #{}: prompt built, calling agent", self.tick_n);
+        let state = State::build(tracked_views, prev_response, self.tick_n);
+        info!("tick #{}: state built, calling agent", self.tick_n);
 
         self.debug_wait("before agent call").await;
 
-        let response = self.agent.step(&prompt).await?;
+        let response = self.agent.step(&state).await?;
         info!("tick #{}: agent responded ({} segments)", self.tick_n, response.segments.len());
 
         self.debug_write_response(&response);

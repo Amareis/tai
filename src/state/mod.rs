@@ -1,6 +1,6 @@
 use crate::agent::AgentResponse;
 
-const SYSTEM_PROMPT: &str = include_str!("system_prompt.txt");
+const SYSTEM: &str = include_str!("system_prompt.txt");
 
 #[derive(Debug, Clone)]
 pub struct TrackedView {
@@ -11,14 +11,14 @@ pub struct TrackedView {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Prompt {
+pub struct State {
     pub system: String,
     pub tracked: Vec<TrackedView>,
     pub previous_response: Option<AgentResponse>,
     pub tick_n: u64,
 }
 
-impl Prompt {
+impl State {
     #[must_use]
     pub fn build(
         tracked: Vec<TrackedView>,
@@ -26,7 +26,7 @@ impl Prompt {
         tick_n: u64,
     ) -> Self {
         Self {
-            system: SYSTEM_PROMPT.to_string(),
+            system: SYSTEM.to_string(),
             tracked,
             previous_response,
             tick_n,

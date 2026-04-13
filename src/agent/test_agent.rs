@@ -1,5 +1,5 @@
 use crate::agent::{Agent, AgentError, AgentResponse, TestStep};
-use crate::prompt::Prompt;
+use crate::state::State;
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,7 +27,7 @@ impl TestAgent {
     #[must_use]
     pub fn add_step(
         mut self,
-        check: impl Fn(&Prompt) + Send + Sync + 'static,
+        check: impl Fn(&State) + Send + Sync + 'static,
         response: AgentResponse,
     ) -> Self {
         self.steps.push(TestStep {
@@ -53,14 +53,14 @@ impl TestAgent {
 
 #[async_trait]
 impl Agent for TestAgent {
-    async fn step(&self, prompt: &Prompt) -> Result<AgentResponse, AgentError> {
+    async fn step(&self, state: &State) -> Result<AgentResponse, AgentError> {
         let idx = self.current.fetch_add(1, Ordering::SeqCst);
         let step = self
             .steps
             .get(idx)
             .ok_or_else(|| AgentError::Api(format!("no test step at index {idx}")))?;
 
-        (step.check)(prompt);
+        (step.check)(state);
 
         Ok(step.response.clone())
     }

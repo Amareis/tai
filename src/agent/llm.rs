@@ -1,5 +1,5 @@
 use super::{Agent, AgentError, AgentResponse};
-use crate::prompt::{Prompt, TrackedView};
+use crate::state::{State, TrackedView};
 use crate::response::parse_response;
 use crate::types::BlockMode;
 use async_openai::error::OpenAIError;
@@ -38,11 +38,11 @@ type MyStreamingType = Pin<Box<dyn Stream<Item = Result<Value, OpenAIError>> + S
 #[async_trait]
 impl Agent for LlmAgent {
     #[allow(clippy::indexing_slicing)]
-    async fn step(&self, prompt: &Prompt) -> Result<AgentResponse, AgentError> {
+    async fn step(&self, state: &State) -> Result<AgentResponse, AgentError> {
         info!("llm step: building request for model '{}'", self.model);
         let request = CreateChatCompletionRequestArgs::default()
             .model(&self.model)
-            .messages(prompt_to_messages(prompt))
+            .messages(state_to_messages(state))
             .stream(true)
             .build()?;
 
@@ -110,11 +110,11 @@ impl Agent for LlmAgent {
 }
 
 #[must_use]
-fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
+fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
     let mut ms: Vec<ChatCompletionRequestMessage> =
-        vec![ChatCompletionRequestSystemMessage::from(prompt.system.clone()).into()];
+        vec![ChatCompletionRequestSystemMessage::from(state.system.clone()).into()];
 
-    let prev_titles: HashSet<&str> = prompt
+    let prev_titles: HashSet<&str> = state
         .previous_response
         .as_ref()
         .map(|resp| {
@@ -125,14 +125,14 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
         })
         .unwrap_or_default();
 
-    let tracked_map: std::collections::HashMap<&str, &TrackedView> = prompt
+    let tracked_map: std::collections::HashMap<&str, &TrackedView> = state
         .tracked
         .iter()
         .map(|v| (v.title.as_str(), v))
         .collect();
 
     // 1. Persistent windows (not from previous response)
-    for view in &prompt.tracked {
+    for view in &state.tracked {
         if !prev_titles.contains(view.title.as_str()) {
             ms.push(render_block_assistant(&view.title, BlockMode::View, "", None));
             ms.push(render_result_user(view));
@@ -140,7 +140,7 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
     }
 
     // 2. Previous response blocks (interleaved assistant/user)
-    if let Some(prev) = &prompt.previous_response {
+    if let Some(prev) = &state.previous_response {
         for block in &prev.segments {
             ms.push(render_block_assistant(
                 &block.window,
@@ -160,7 +160,7 @@ fn prompt_to_messages(prompt: &Prompt) -> Vec<ChatCompletionRequestMessage> {
     }
 
     // 4. Dashboard
-    ms.push(render_dashboard(prompt));
+    ms.push(render_dashboard(state));
 
     ms
 }
@@ -200,9 +200,9 @@ fn render_result_user(view: &TrackedView) -> ChatCompletionRequestMessage {
     ChatCompletionRequestUserMessage::from(body).into()
 }
 
-fn render_dashboard(prompt: &Prompt) -> ChatCompletionRequestMessage {
+fn render_dashboard(state: &State) -> ChatCompletionRequestMessage {
     let mut body = String::from("== Windows ==\n");
-    for view in &prompt.tracked {
+    for view in &state.tracked {
         let lines = view.output.lines().count();
         let mode = if view.rerun { "view" } else { "exec" };
         let status = if view.rerun { "rerun" } else { "cached" };
@@ -211,6 +211,6 @@ fn render_dashboard(prompt: &Prompt) -> ChatCompletionRequestMessage {
             format_args!("{}: {} lines, {} ({})\n", view.title, lines, mode, status),
         );
     }
-    let _ = std::fmt::Write::write_fmt(&mut body, format_args!("\n== Tick #{} ==", prompt.tick_n));
+    let _ = std::fmt::Write::write_fmt(&mut body, format_args!("\n== Tick #{} ==", state.tick_n));
     ChatCompletionRequestUserMessage::from(body).into()
 }

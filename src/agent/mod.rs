@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_openai::error::OpenAIError;
 use serde::{Deserialize, Serialize};
-use crate::prompt::Prompt;
+use crate::state::State;
 use crate::types::{BlockMode, ParsedBlock};
 
 mod test_agent;
@@ -14,7 +14,7 @@ pub use llm::LlmAgent;
 
 #[async_trait]
 pub trait Agent: Send + Sync {
-    async fn step(&self, prompt: &Prompt) -> Result<AgentResponse, AgentError>;
+    async fn step(&self, state: &State) -> Result<AgentResponse, AgentError>;
 
     fn as_any(&self) -> Option<&dyn Any> {
         None
@@ -73,7 +73,7 @@ pub struct NopAgent;
 
 #[async_trait]
 impl Agent for NopAgent {
-    async fn step(&self, _prompt: &Prompt) -> Result<AgentResponse, AgentError> {
+    async fn step(&self, _state: &State) -> Result<AgentResponse, AgentError> {
         Ok(AgentResponse::empty())
     }
 }
@@ -100,7 +100,7 @@ impl MockAgent {
 
 #[async_trait]
 impl Agent for MockAgent {
-    async fn step(&self, _prompt: &Prompt) -> Result<AgentResponse, AgentError> {
+    async fn step(&self, _state: &State) -> Result<AgentResponse, AgentError> {
         let idx = self.current.fetch_add(1, Ordering::SeqCst);
         self.responses
             .get(idx)
@@ -110,6 +110,6 @@ impl Agent for MockAgent {
 }
 
 pub struct TestStep {
-    check: Box<dyn Fn(&Prompt) + Send + Sync>,
+    check: Box<dyn Fn(&State) + Send + Sync>,
     response: AgentResponse,
 }
