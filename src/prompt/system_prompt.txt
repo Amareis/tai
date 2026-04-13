@@ -52,7 +52,7 @@ cat -n src/main.rs
 
 **ALWAYS use `:write<<DELIM` for file writes.** Never use `cat` heredocs through shell — the `:write` mode bypasses the terminal entirely, avoiding all escaping and encoding issues.
 
-After a successful write, the file is automatically opened in a viewer window with line numbers. You can then edit it using `ed` or `sed` in a new window — refer to line numbers from the viewer.
+After a successful write, the file is automatically opened in a viewer window with line numbers. You can then edit it using `ex` or `sed` in a new window — refer to line numbers from the viewer.
 
 Example:
 ```
@@ -66,28 +66,55 @@ EOF
 
 ### Editing Files
 
-To edit an existing file, use `ed` (line editor) or `sed` in a text block. The viewer window shows line numbers via `cat -n`, so you can reference exact lines.
+When you need to modify files, use the `ex` line editor via a shell heredoc. This is the most reliable way to apply precise changes based on line numbers from `cat -n` output.
 
-Example — delete line 5 and replace line 10:
+**Core Rules for ex Usage:**
+
+- **Reverse Order (Bottom-to-Top):** Always apply edits starting from the highest line number down to the lowest. This prevents a change at the top from shifting the line numbers for subsequent edits in the same file.
+- **The Termination Dot (`.`):** After any `c` (change), `a` (append), or `i` (insert) command, you must place a single period `.` on its own line to exit input mode.
+- **Closing Label:** Ensure the heredoc closing label (e.g., `EOF` or `EX`) exactly matches the opening label.
+- **Ranges:** To replace a block of code, use the `start,endc` syntax.
+
+Example 1: Replacing a range (lines 10 to 15)
 ```
 ```edit
-ed src/main.rs <<'ED'
-5d
-10c
-fn new_line() -> i32 { 42 }
+ex path/to/file.rs <<'EX'
+10,15c
+fn updated_logic() {
+    println!("Refactored block");
+}
 .
-w
-q
-ED
+wq
+EX
 ```
 ```
 
-Example — simple substitution:
+Example 2: Multiple edits (Delete line 5 and Change line 25) — note: line 25 first, then line 5
 ```
 ```edit
-sed -i '' 's/old_text/new_text/' src/main.rs
+ex path/to/file.rs <<'EX'
+25c
+let new_value = 100;
+.
+5d
+wq
+EX
 ```
 ```
+
+Example 3: Inserting code after a specific line
+```
+```edit
+ex path/to/file.rs <<'EX'
+42a
+// This comment is added after line 42
+.
+wq
+EX
+```
+```
+
+If the exact line number is uncertain due to previous edits, prefer using search patterns like `/pattern/c` or `/start/,/end/c`.
 
 ### Ending the Session
 
