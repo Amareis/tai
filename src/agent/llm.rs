@@ -1,6 +1,6 @@
 use super::{Agent, AgentError, AgentResponse};
-use crate::state::{State, TrackedView};
 use crate::response::parse_response;
+use crate::state::{State, TrackedView};
 use crate::types::BlockMode;
 use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
@@ -52,7 +52,8 @@ impl Agent for LlmAgent {
         }
 
         info!("llm step: creating stream...");
-        let mut stream: MyStreamingType = match self.client.chat().create_stream_byot(request).await {
+        let mut stream: MyStreamingType = match self.client.chat().create_stream_byot(request).await
+        {
             Ok(s) => s,
             Err(e) => {
                 error!("llm step: failed to create stream: {e}");
@@ -94,7 +95,11 @@ impl Agent for LlmAgent {
         }
         println!("\nDONE");
 
-        info!("llm step: stream complete, text {} bytes, reasoning {} bytes", text.len(), reasoning.len());
+        info!(
+            "llm step: stream complete, text {} bytes, reasoning {} bytes",
+            text.len(),
+            reasoning.len()
+        );
 
         let resp = parse_response(reasoning, &text);
 
@@ -117,12 +122,7 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
     let prev_titles: HashSet<&str> = state
         .previous_response
         .as_ref()
-        .map(|resp| {
-            resp.segments
-                .iter()
-                .map(|b| b.window.as_str())
-                .collect()
-        })
+        .map(|resp| resp.segments.iter().map(|b| b.window.as_str()).collect())
         .unwrap_or_default();
 
     let tracked_map: std::collections::HashMap<&str, &TrackedView> = state
@@ -134,13 +134,26 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
     // 1. Persistent windows (not from previous response)
     for view in &state.tracked {
         if !prev_titles.contains(view.title.as_str()) {
-            ms.push(render_block_assistant(&view.title, BlockMode::View, "", None));
+            ms.push(render_block_assistant(
+                &view.title,
+                BlockMode::View,
+                "",
+                None,
+            ));
             ms.push(render_result_user(view));
         }
     }
 
     // 2. Previous response blocks (interleaved assistant/user)
     if let Some(prev) = &state.previous_response {
+        if !prev.reasoning.is_empty() {
+            ms.push(render_block_assistant(
+                "REASONING",
+                BlockMode::View,
+                &prev.reasoning,
+                None,
+            ));
+        }
         for block in &prev.segments {
             ms.push(render_block_assistant(
                 &block.window,
@@ -181,10 +194,14 @@ fn render_block_assistant(
             let _ = std::fmt::Write::write_fmt(&mut text, format_args!("```{window}:close\n```"));
         }
         BlockMode::Exec => {
-            let _ = std::fmt::Write::write_fmt(&mut text, format_args!("```{window}:exec\n{content}\n```"));
+            let _ = std::fmt::Write::write_fmt(
+                &mut text,
+                format_args!("```{window}:exec\n{content}\n```"),
+            );
         }
         BlockMode::View => {
-            let _ = std::fmt::Write::write_fmt(&mut text, format_args!("```{window}\n{content}\n```"));
+            let _ =
+                std::fmt::Write::write_fmt(&mut text, format_args!("```{window}\n{content}\n```"));
         }
     }
     ChatCompletionRequestAssistantMessage::from(text).into()
@@ -238,7 +255,10 @@ fn render_dashboard(state: &State) -> ChatCompletionRequestMessage {
 
     let _ = std::fmt::Write::write_fmt(
         &mut body,
-        format_args!("\n== Context: ~{total_tokens} tokens | Tick #{} ==", state.tick_n),
+        format_args!(
+            "\n== Context: ~{total_tokens} tokens | Tick #{} ==",
+            state.tick_n
+        ),
     );
     ChatCompletionRequestUserMessage::from(body).into()
 }

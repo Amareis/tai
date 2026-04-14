@@ -11,21 +11,20 @@ tai server          # обычный запуск
 tai server --debug  # пошаговый режим (Enter между тиками)
 ```
 
-CLI (`src/main.rs`) через clap парсит команду `server`, создаёт набор начальных окон (task, tree) и вызывает `run_server()` из `lib.rs`.
+CLI (`src/main.rs`) через clap парсит команду `server`, читает `tai.md` как начальный ответ, парсит его через `parse_response()` и вызывает `run_server()` из `lib.rs`.
 
 ### Цикл тиков
 
 `Server` (`src/core/mod.rs`) крутит `loop`:
 
-1. **apply_pending** — берёт сегменты от предыдущего ответа агента, обновляет список `tracked`-команд
+1. **apply_segments_sorted** — берёт сегменты от предыдущего ответа агента, обновляет список `tracked`-команд (Close → Exec → View)
 2. **run_tracked** — выполняет команды:
    - `View` — выполняется каждый тик (просмотр файлов, статусы)
    - `Exec` — выполняется один раз, результат кешируется (запись файлов, установка пакетов)
    - `Close` — убирает команду из отслеживаемых
-3. **build prompt** — системный промпт + содержимое всех окон + предыдущий ответ агента
-4. **agent.step()** — вызов LLM (streaming через async-openai)
-5. **parse_response** — разбор ответа на `ParsedSegment` (Block / Prose)
-6. Сохранить сегменты как pending для следующего тика
+3. **build state** — `State` собирает: системный промпт + содержимое всех окон (Vec<TrackedView>) + предыдущий ответ агента
+4. **agent.step(&state)** — вызов LLM (streaming через async-openai)
+5. Сегменты ответа сохраняются как pending для следующего тика
 
 **Выход:** когда `tracked` пуст (все окна закрыты).
 
@@ -66,9 +65,9 @@ one-shot command
 src/
 ├── main.rs              # CLI: tai server [--debug]
 ├── lib.rs               # create_server(), run_server()
-├── types.rs             # BlockMode, ParsedSegment
+├── types.rs             # BlockMode, ParsedBlock
 ├── agent/
-│   ├── mod.rs           # Agent trait, AgentResponse, NopAgent, MockAgent
+│   ├── mod.rs           # Agent trait, AgentResponse, NopAgent, MockAgent, TestStep
 │   ├── llm.rs           # LlmAgent — async-openai streaming (поддержка reasoning_content)
 │   └── test_agent.rs    # TestAgent — пошаговая проверка для E2E тестов
 ├── backend/
@@ -76,13 +75,13 @@ src/
 │   └── local.rs         # LocalBackend — bash -c через duct
 ├── core/
 │   └── mod.rs           # Server — tick loop, tracked commands, apply/execute
-├── prompt/
-│   ├── mod.rs           # Prompt, TrackedView
+├── state/
+│   ├── mod.rs           # State, TrackedView — сборка данных для промпта
 │   └── system_prompt.txt # Системный промпт для модели
 ├── response/
 │   └── mod.rs           # parse_response() — парсинг code blocks с поддержкой heredoc
-└── tests/
-    └── server_test.rs   # E2E тесты с TestAgent + LocalBackend
+tests/
+└── server_test.rs       # E2E тесты с TestAgent + LocalBackend
 ```
 
 ## Ключевые типы
@@ -90,25 +89,25 @@ src/
 | Тип | Где | Суть |
 |-----|-----|------|
 | `BlockMode` | `types.rs` | `View` / `Exec` / `Close` — режим окна |
-| `ParsedSegment` | `types.rs` | `Block { window, mode, content }` или `Prose(String)` |
+| `ParsedBlock` | `types.rs` | window, mode, content, prose (Option<String>) — один блок ответа |
 | `TrackedCmd` | `core/mod.rs` | Внутренний: title, command, rerun, cached_output/exit |
-| `TrackedView` | `prompt/mod.rs` | title, output, exit_code — для сборки промпта |
-| `Prompt` | `prompt/mod.rs` | system + tracked[] + previous_response |
-| `AgentResponse` | `agent/mod.rs` | reasoning + segments[] |
+| `TrackedView` | `state/mod.rs` | title, output, exit_code, rerun — для сборки состояния |
+| `State` | `state/mod.rs` | system + tracked[] + previous_response + tick_n |
+| `AgentResponse` | `agent/mod.rs` | reasoning + segments[] + outro (Option<String>) |
 | `CmdOutput` | `backend/mod.rs` | exit_code + stdout |
 
 ## Трейты
 
-- **`Agent`** (`agent/mod.rs`) — `async fn step(&self, prompt: &Prompt) -> Result<AgentResponse, AgentError>`
+- **`Agent`** (`agent/mod.rs`) — `async fn step(&self, state: &State) -> Result<AgentResponse, AgentError>`
   - Реализации: `LlmAgent`, `NopAgent`, `MockAgent`, `TestAgent`
 - **`Backend`** (`backend/mod.rs`) — `async fn run(&self, title: &str, command: &str) -> CmdOutput`
   - Реализация: `LocalBackend` (bash через duct)
 
 ## Зависимости
 
-Основные: `tokio`, `async-openai` (streaming + BYOT), `duct` (shell), `clap` (CLI), `tracing`, `serde`.
+Основные: `tokio`, `async-openai` (streaming + BYOT), `duct` (shell), `clap` (CLI), `tracing`, `serde`, `dotenvy`.
 
-Clippy: pedantic, panic/indexing/unwrap — deny. Конфиг уже в `.cargo/config.toml` — просто `cargo clippy`, без флагов.
+Clippy: pedantic, panic/indexing/unwrap — deny. Конфиг в `clippy.toml` — просто `cargo clippy`, без флагов.
 
 ## Команды для проверки
 
