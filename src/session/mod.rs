@@ -1,8 +1,6 @@
-use crate::agent::AgentResponse;
 use crate::backend::CmdOutput;
 use crate::response::{parse_response, serialize_blocks};
 use crate::types::ParsedBlock;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::info;
 use uuid::Uuid;
@@ -201,7 +199,7 @@ impl SessionDir {
     ) -> std::collections::HashMap<String, CmdOutput> {
         let mut outputs = std::collections::HashMap::new();
         for block in segments {
-            if block.mode == BlockMode::Close {
+            if block.mode == crate::types::BlockMode::Close {
                 continue;
             }
             if let Some(output) = self.read_out(&block.window) {
@@ -257,42 +255,6 @@ fn parse_out_file(raw: &str) -> (i32, String) {
     (exit_code, rest)
 }
 
-#[must_use]
-pub fn merge_segments(old: &[ParsedBlock], response: &AgentResponse) -> Vec<ParsedBlock> {
-    let mut closed: HashSet<String> = HashSet::new();
-    let mut updated: HashSet<String> = HashSet::new();
-
-    for block in &response.segments {
-        match block.mode {
-            BlockMode::Close => {
-                closed.insert(block.window.clone());
-            }
-            _ => {
-                updated.insert(block.window.clone());
-            }
-        }
-    }
-
-    let mut result: Vec<ParsedBlock> = Vec::new();
-
-    for block in old {
-        if !closed.contains(&block.window) && !updated.contains(&block.window) {
-            result.push(ParsedBlock {
-                prose: None,
-                ..block.clone()
-            });
-        }
-    }
-
-    for block in &response.segments {
-        if block.mode != BlockMode::Close {
-            result.push(block.clone());
-        }
-    }
-
-    result
-}
-
 const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 
 fn generate_short_id() -> String {
@@ -308,12 +270,9 @@ fn generate_short_id() -> String {
         .collect()
 }
 
-use crate::types::BlockMode;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::BlockMode;
 
     #[test]
     fn test_parse_out_file_exit() {
@@ -340,119 +299,5 @@ mod tests {
         let (code, stdout) = parse_out_file("exit 0\n");
         assert_eq!(code, 0);
         assert_eq!(stdout, "");
-    }
-
-    #[test]
-    fn test_merge_basic() {
-        let old = vec![
-            ParsedBlock {
-                window: "mind".into(),
-                mode: BlockMode::View,
-                content: "cat mind.md".into(),
-                prose: None,
-            },
-            ParsedBlock {
-                window: "tree".into(),
-                mode: BlockMode::View,
-                content: "tree".into(),
-                prose: None,
-            },
-        ];
-
-        let response = AgentResponse::block("build", BlockMode::View, "cargo build");
-
-        let merged = merge_segments(&old, &response);
-        assert_eq!(merged.len(), 3);
-        assert_eq!(merged[0].window, "mind");
-        assert_eq!(merged[1].window, "tree");
-        assert_eq!(merged[2].window, "build");
-        assert!(merged[2].prose.is_none());
-    }
-
-    #[test]
-    fn test_merge_close() {
-        let old = vec![
-            ParsedBlock {
-                window: "mind".into(),
-                mode: BlockMode::View,
-                content: "cat mind.md".into(),
-                prose: None,
-            },
-            ParsedBlock {
-                window: "build".into(),
-                mode: BlockMode::View,
-                content: "cargo build".into(),
-                prose: None,
-            },
-        ];
-
-        let response = AgentResponse::block("build", BlockMode::Close, "");
-
-        let merged = merge_segments(&old, &response);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].window, "mind");
-    }
-
-    #[test]
-    fn test_merge_replace() {
-        let old = vec![ParsedBlock {
-            window: "build".into(),
-            mode: BlockMode::View,
-            content: "cargo build".into(),
-            prose: Some("old prose".into()),
-        }];
-
-        let response = AgentResponse::block("build", BlockMode::Exec, "cargo build --release");
-
-        let merged = merge_segments(&old, &response);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].window, "build");
-        assert_eq!(merged[0].content, "cargo build --release");
-        assert_eq!(merged[0].mode, BlockMode::Exec);
-    }
-
-    #[test]
-    fn test_merge_old_loses_prose() {
-        let old = vec![ParsedBlock {
-            window: "mind".into(),
-            mode: BlockMode::View,
-            content: "cat mind.md".into(),
-            prose: Some("checking mind".into()),
-        }];
-
-        let response = AgentResponse::block("build", BlockMode::View, "cargo build");
-
-        let merged = merge_segments(&old, &response);
-        assert_eq!(merged.len(), 2);
-        assert!(merged[0].prose.is_none());
-        assert!(merged[1].prose.is_none());
-    }
-
-    #[test]
-    fn test_roundtrip_serialize_parse() {
-        let blocks = vec![
-            ParsedBlock {
-                window: "mind".into(),
-                mode: BlockMode::View,
-                content: "cat mind.md".into(),
-                prose: Some("checking state".into()),
-            },
-            ParsedBlock {
-                window: "install".into(),
-                mode: BlockMode::Exec,
-                content: "cargo add serde".into(),
-                prose: None,
-            },
-        ];
-
-        let text = serialize_blocks(&blocks);
-        let parsed = parse_response(String::new(), &text);
-        assert_eq!(parsed.segments.len(), 2);
-        assert_eq!(parsed.segments[0].window, "mind");
-        assert_eq!(parsed.segments[0].mode, BlockMode::View);
-        assert_eq!(parsed.segments[0].content, "cat mind.md");
-        assert_eq!(parsed.segments[0].prose.as_deref(), Some("checking state"));
-        assert_eq!(parsed.segments[1].window, "install");
-        assert_eq!(parsed.segments[1].mode, BlockMode::Exec);
     }
 }

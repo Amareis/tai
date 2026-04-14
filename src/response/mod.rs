@@ -541,4 +541,32 @@ cat src/main.rs
             ParsedSegment::Block { mode, .. } if *mode == BlockMode::View
         ));
     }
+
+    #[test]
+    fn test_roundtrip_serialize_parse() {
+        let blocks = vec![
+            ParsedBlock {
+                window: "mind".into(),
+                mode: BlockMode::View,
+                content: "cat mind.md".into(),
+                prose: Some("checking state".into()),
+            },
+            ParsedBlock {
+                window: "install".into(),
+                mode: BlockMode::Exec,
+                content: "cargo add serde".into(),
+                prose: None,
+            },
+        ];
+
+        let text = serialize_blocks(&blocks);
+        let parsed = parse_response(String::new(), &text);
+        assert_eq!(parsed.segments.len(), 2);
+        assert_eq!(parsed.segments[0].window, "mind");
+        assert_eq!(parsed.segments[0].mode, BlockMode::View);
+        assert_eq!(parsed.segments[0].content, "cat mind.md");
+        assert_eq!(parsed.segments[0].prose.as_deref(), Some("checking state"));
+        assert_eq!(parsed.segments[1].window, "install");
+        assert_eq!(parsed.segments[1].mode, BlockMode::Exec);
+    }
 }

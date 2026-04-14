@@ -1,9 +1,9 @@
-use crate::agent::Agent;
+use crate::agent::{Agent, AgentResponse};
 use crate::backend::Backend;
-use crate::session::{SessionDir, merge_segments};
+use crate::session::SessionDir;
 use crate::state::State;
 use crate::types::{BlockMode, ParsedBlock};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, info};
@@ -102,7 +102,7 @@ impl Server {
     fn print_banner(&self) {
         let to_resume =
             format!("  tai server {}  ", self.session.session_path().display());
-        let width = std::cmp::min(50, to_resume.chars().count());
+        let width = std::cmp::max(50, to_resume.chars().count());
         let border = "═".repeat(width);
         println!();
         println!("╔{:═^width$}╗", " TO RESUME SESSION ");
@@ -141,12 +141,6 @@ impl Server {
         *segments = merge_segments(segments, &response);
         self.session.write_index(segments);
 
-        for block in &response.segments {
-            if block.mode == BlockMode::Close {
-                self.session.remove_out(&block.window);
-            }
-        }
-
         info!("tick #{tick_n}: done");
         Ok(())
     }
@@ -164,7 +158,10 @@ impl Server {
         for block in segments {
             match block.mode {
                 BlockMode::Ask => ask_blocks.push(block),
-                BlockMode::Close => {}
+                BlockMode::Close => {
+
+                    self.session.remove_out(&block.window);
+                }
                 BlockMode::Exec => exec_blocks.push(block),
                 BlockMode::View => view_blocks.push(block),
             }
@@ -217,7 +214,7 @@ impl Server {
         print!("> ");
         std::io::stdout().flush().ok();
         let stdin = tokio::io::stdin();
-        let mut reader = tokio::io::BufReader::new(stdin);
+        let mut reader = BufReader::new(stdin);
         let mut answer = String::new();
         let _ = reader.read_line(&mut answer).await;
         answer.trim_end().to_string()
@@ -235,7 +232,7 @@ impl Server {
     }
 }
 
-fn serialize_blocks_safe(segments: &[crate::types::ParsedBlock]) -> String {
+fn serialize_blocks_safe(segments: &[ParsedBlock]) -> String {
     use std::fmt::Write;
     let mut text = String::new();
     for block in segments {
@@ -259,4 +256,40 @@ fn serialize_blocks_safe(segments: &[crate::types::ParsedBlock]) -> String {
         }
     }
     text
+}
+
+#[must_use]
+fn merge_segments(old: &[ParsedBlock], response: &AgentResponse) -> Vec<ParsedBlock> {
+    let mut closed: HashSet<String> = HashSet::new();
+    let mut updated: HashSet<String> = HashSet::new();
+
+    for block in &response.segments {
+        match block.mode {
+            BlockMode::Close => {
+                closed.insert(block.window.clone());
+            }
+            _ => {
+                updated.insert(block.window.clone());
+            }
+        }
+    }
+
+    let mut result: Vec<ParsedBlock> = Vec::new();
+
+    for block in old {
+        if !closed.contains(&block.window) && !updated.contains(&block.window) {
+            result.push(ParsedBlock {
+                prose: None,
+                ..block.clone()
+            });
+        }
+    }
+
+    for block in &response.segments {
+        if block.mode != BlockMode::Close {
+            result.push(block.clone());
+        }
+    }
+
+    result
 }
