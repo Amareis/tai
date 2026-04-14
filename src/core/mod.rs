@@ -50,7 +50,7 @@ impl Server {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn segment_count(&self) -> usize {
         self.session.read_index().len()
     }
@@ -65,7 +65,10 @@ impl Server {
             return Ok(());
         }
 
-        info!("run: {} initial segments, entering tick loop", segments.len());
+        info!(
+            "run: {} initial segments, entering tick loop",
+            segments.len()
+        );
 
         loop {
             let result = {
@@ -100,8 +103,7 @@ impl Server {
     }
 
     fn print_banner(&self) {
-        let to_resume =
-            format!("  tai server {}  ", self.session.session_path().display());
+        let to_resume = format!("  tai server {}  ", self.session.session_path().display());
         let width = std::cmp::max(50, to_resume.chars().count());
         let border = "═".repeat(width);
         println!();
@@ -133,8 +135,7 @@ impl Server {
             response.segments.len()
         );
 
-        self.session
-            .write_response(&response.reasoning, &serialize_blocks_safe(&response.segments));
+        self.session.write_response(&response);
 
         self.session.append_to_mind(&response.reasoning);
 
@@ -159,7 +160,6 @@ impl Server {
             match block.mode {
                 BlockMode::Ask => ask_blocks.push(block),
                 BlockMode::Close => {
-
                     self.session.remove_out(&block.window);
                 }
                 BlockMode::Exec => exec_blocks.push(block),
@@ -230,32 +230,6 @@ impl Server {
         let mut lines = reader.lines();
         let _ = lines.next_line().await;
     }
-}
-
-fn serialize_blocks_safe(segments: &[ParsedBlock]) -> String {
-    use std::fmt::Write;
-    let mut text = String::new();
-    for block in segments {
-        if let Some(prose) = &block.prose {
-            text.push_str(prose);
-            text.push('\n');
-        }
-        match block.mode {
-            BlockMode::Close => {
-                let _ = write!(text, "```{}:close\n```\n", block.window);
-            }
-            BlockMode::Exec => {
-                let _ = write!(text, "```{}:exec\n{}\n```\n", block.window, block.content);
-            }
-            BlockMode::View => {
-                let _ = write!(text, "```{}\n{}\n```\n", block.window, block.content);
-            }
-            BlockMode::Ask => {
-                let _ = write!(text, "```{}:ask\n{}\n```\n", block.window, block.content);
-            }
-        }
-    }
-    text
 }
 
 #[must_use]

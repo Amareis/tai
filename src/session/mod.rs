@@ -1,3 +1,4 @@
+use crate::agent::AgentResponse;
 use crate::backend::CmdOutput;
 use crate::response::{parse_response, serialize_blocks};
 use crate::types::ParsedBlock;
@@ -209,13 +210,18 @@ impl SessionDir {
         outputs
     }
 
-    pub fn write_response(&self, reasoning: &str, text: &str) {
+    pub fn write_response(&self, response: &AgentResponse) {
         let mut content = String::new();
-        if !reasoning.is_empty() {
-            content.push_str(reasoning);
+        if !response.reasoning.is_empty() {
+            content.push_str(&response.reasoning);
             content.push_str("\n\n");
         }
-        content.push_str(text);
+        content.push_str(&serialize_blocks(&response.segments));
+        if let Some(outro) = &response.outro {
+            content.push('\n');
+            content.push_str(outro);
+        }
+        content.push('\n');
         let path = self.internal.join("response.md");
         std::fs::write(&path, content).ok();
     }
