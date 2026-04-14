@@ -1,20 +1,25 @@
 use async_trait::async_trait;
+use std::path::PathBuf;
 use tracing::{debug, warn};
 
 use super::{Backend, CmdOutput};
 
-pub struct LocalBackend;
+pub struct LocalBackend {
+    cwd: PathBuf,
+}
 
 impl Default for LocalBackend {
     fn default() -> Self {
-        Self::new()
+        Self {
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
     }
 }
 
 impl LocalBackend {
     #[must_use]
-    pub fn new() -> Self {
-        Self
+    pub fn new(cwd: PathBuf) -> Self {
+        Self { cwd }
     }
 }
 
@@ -23,9 +28,11 @@ impl Backend for LocalBackend {
     async fn run(&self, title: &str, command: &str) -> CmdOutput {
         debug!("run: executing '{title}': {command}");
         let full_script = format!("set -e -o pipefail;\n{command}");
+        let cwd = self.cwd.clone();
 
         let result = tokio::task::spawn_blocking(move || {
             match duct::cmd!("bash", "-c", &full_script)
+                .dir(&cwd)
                 .stderr_to_stdout()
                 .stdout_capture()
                 .unchecked()

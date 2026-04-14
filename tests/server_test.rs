@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use tai::agent::{AgentResponse, TestAgent};
+use tai::session::SessionDir;
 use tai::types::BlockMode;
 use tai::core::Server;
 use tai::backend::local::LocalBackend;
@@ -13,20 +14,30 @@ fn assert_test_agent(server: &Server) {
         .expect("expected TestAgent").assert_all_consumed();
 }
 
-fn test_backend() -> LocalBackend {
-    LocalBackend::new()
+fn test_session() -> SessionDir {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().to_path_buf();
+    std::fs::write(project.join("tai.md"), "").ok();
+    SessionDir::create_new(&project, false).expect("session")
+}
+
+fn test_server(session: SessionDir, agent: TestAgent) -> Server {
+    let cwd = session.workspace().to_path_buf();
+    Server::with_backend(session, Box::new(LocalBackend::new(cwd)), Box::new(agent))
 }
 
 #[tokio::test]
 #[traced_test]
 async fn tick_empty_session() {
+    let session = test_session();
     let agent = TestAgent::new().add_step(
         |_state: &State| {},
         AgentResponse::empty(),
     );
 
-    let mut server = Server::new(Box::new(test_backend()), Box::new(agent));
-    server.tick().await.unwrap();
+    let mut server = test_server(session, agent);
+    let mut segments = vec![];
+    server.tick(&mut segments).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -34,6 +45,7 @@ async fn tick_empty_session() {
 #[tokio::test]
 #[traced_test]
 async fn tick_agent_runs_command() {
+    let session = test_session();
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -45,15 +57,17 @@ async fn tick_agent_runs_command() {
         )
         .add_step(
             |state: &State| {
-                let found = state.tracked.iter().any(|v| v.output.contains("marker-xyz"));
-                assert!(found, "expected marker-xyz in tracked output, got: {:?}", state.tracked);
+                let found = state.outputs.get("build")
+                    .is_some_and(|o| o.stdout.contains("marker-xyz"));
+                assert!(found, "expected marker-xyz in outputs, got: {:?}", state.outputs);
             },
             AgentResponse::block("build", BlockMode::Close, ""),
         );
 
-    let mut server = Server::new(Box::new(test_backend()), Box::new(agent));
-    server.tick().await.unwrap();
-    server.tick().await.unwrap();
+    let mut server = test_server(session, agent);
+    let mut segments = vec![];
+    server.tick(&mut segments).await.unwrap();
+    server.tick(&mut segments).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -61,6 +75,7 @@ async fn tick_agent_runs_command() {
 #[tokio::test]
 #[traced_test]
 async fn close_removes_from_tracked() {
+    let session = test_session();
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -75,12 +90,13 @@ async fn close_removes_from_tracked() {
             AgentResponse::empty(),
         );
 
-    let mut server = Server::new(Box::new(test_backend()), Box::new(agent));
-    server.tick().await.unwrap();
-    server.tick().await.unwrap();
-    assert_eq!(server.tracked_count(), 1);
-    server.tick().await.unwrap();
-    assert_eq!(server.tracked_count(), 0);
+    let mut server = test_server(session, agent);
+    let mut segments = vec![];
+    server.tick(&mut segments).await.unwrap();
+    assert_eq!(segments.len(), 1);
+    server.tick(&mut segments).await.unwrap();
+    assert_eq!(segments.len(), 0);
+    server.tick(&mut segments).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -88,6 +104,7 @@ async fn close_removes_from_tracked() {
 #[tokio::test]
 #[traced_test]
 async fn exec_runs_once_then_caches() {
+    let session = test_session();
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -95,17 +112,17 @@ async fn exec_runs_once_then_caches() {
         )
         .add_step(
             |state: &State| {
-                let found = state.tracked.iter().any(|v| {
-                    v.title == "install" && v.output.contains("installed-once")
-                });
-                assert!(found, "expected 'installed-once' in install view, got: {:?}", state.tracked);
+                let found = state.outputs.get("install")
+                    .is_some_and(|o| o.stdout.contains("installed-once"));
+                assert!(found, "expected 'installed-once' in install output, got: {:?}", state.outputs);
             },
             AgentResponse::block("install", BlockMode::Close, ""),
         );
 
-    let mut server = Server::new(Box::new(test_backend()), Box::new(agent));
-    server.tick().await.unwrap();
-    server.tick().await.unwrap();
+    let mut server = test_server(session, agent);
+    let mut segments = vec![];
+    server.tick(&mut segments).await.unwrap();
+    server.tick(&mut segments).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -113,6 +130,7 @@ async fn exec_runs_once_then_caches() {
 #[tokio::test]
 #[traced_test]
 async fn upsert_replaces_existing_title() {
+    let session = test_session();
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -124,28 +142,22 @@ async fn upsert_replaces_existing_title() {
         )
         .add_step(
             |state: &State| {
-                assert_eq!(state.tracked.len(), 1, "expected 1 tracked view, got {}", state.tracked.len());
-                let found = state.tracked.iter().any(|v| {
-                    v.title == "build" && v.output.contains("second") && !v.output.contains("first")
-                });
-                assert!(found, "expected 'second' but not 'first' in build view, got: {:?}", state.tracked);
+                assert_eq!(state.segments.len(), 1, "expected 1 segment, got {}", state.segments.len());
+                let found = state.outputs.get("build")
+                    .is_some_and(|o| o.stdout.contains("second") && !o.stdout.contains("first"));
+                assert!(found, "expected 'second' but not 'first' in build output, got: {:?}", state.outputs);
             },
             AgentResponse::block("build", BlockMode::Close, ""),
-        )
-        .add_step(
-            |_state: &State| {},
-            AgentResponse::empty(),
         );
 
-    let mut server = Server::new(Box::new(test_backend()), Box::new(agent));
-    server.tick().await.unwrap();
-    assert_eq!(server.tracked_count(), 0);
-    server.tick().await.unwrap();
-    assert_eq!(server.tracked_count(), 1);
-    server.tick().await.unwrap();
-    assert_eq!(server.tracked_count(), 1);
-    server.tick().await.unwrap();
-    assert_eq!(server.tracked_count(), 0);
+    let mut server = test_server(session, agent);
+    let mut segments = vec![];
+    server.tick(&mut segments).await.unwrap();
+    assert_eq!(segments.len(), 1);
+    server.tick(&mut segments).await.unwrap();
+    assert_eq!(segments.len(), 1);
+    server.tick(&mut segments).await.unwrap();
+    assert_eq!(segments.len(), 0);
 
     assert_test_agent(&server);
 }

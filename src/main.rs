@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "tai", about = "Terminal Agent Interface")]
@@ -6,6 +7,8 @@ enum Cli {
     Server {
         #[arg(long, short)]
         debug: bool,
+
+        path: Option<PathBuf>,
     },
 }
 
@@ -14,14 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli {
-        Cli::Server { debug } => {
+        Cli::Server { debug, path } => {
             dotenv::dotenv().ok();
-
-            let initial = std::fs::read_to_string("tai.md")
-                .ok()
-                .map(|content| tai::response::parse_response(String::new(), &content));
-
-            tai::run_server(debug, initial).await
+            tai::run_server(path.as_deref(), debug).await
         }
     }
 }

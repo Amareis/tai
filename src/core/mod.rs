@@ -1,20 +1,12 @@
-use crate::agent::{Agent, AgentResponse};
+use crate::agent::Agent;
 use crate::backend::Backend;
-use crate::state::{State, TrackedView};
+use crate::session::{SessionDir, merge_segments};
+use crate::state::State;
 use crate::types::{BlockMode, ParsedBlock};
-use std::fmt::Write;
-use std::path::PathBuf;
+use std::collections::HashMap;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, info};
-
-struct TrackedCmd {
-    title: String,
-    command: String,
-    rerun: bool,
-    cached_output: Option<String>,
-    cached_exit: Option<i32>,
-}
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -26,157 +18,209 @@ pub enum CoreError {
 }
 
 pub struct Server {
+    session: SessionDir,
     back: Box<dyn Backend>,
     pub agent: Box<dyn Agent>,
-    tracked: Vec<TrackedCmd>,
     pub debug: bool,
-    tick_n: u64,
-    last_tick: Option<AgentResponse>,
-    debug_dir: PathBuf,
 }
 
 impl Server {
     #[must_use]
-    pub fn new(back: Box<dyn Backend>, agent: Box<dyn Agent>) -> Self {
+    pub fn new(session: SessionDir, _back: Box<dyn Agent>, agent: Box<dyn Agent>) -> Self {
+        let cwd = session.workspace().to_path_buf();
         Self {
-            back,
+            session,
+            back: Box::new(crate::backend::local::LocalBackend::new(cwd)),
             agent,
-            tracked: Vec::new(),
             debug: false,
-            tick_n: 0,
-            last_tick: None,
-            debug_dir: PathBuf::from("tai-debug"),
         }
     }
 
     #[must_use]
-    pub fn tracked_count(&self) -> usize {
-        self.tracked.len()
+    pub fn with_backend(
+        session: SessionDir,
+        back: Box<dyn Backend>,
+        agent: Box<dyn Agent>,
+    ) -> Self {
+        Self {
+            session,
+            back,
+            agent,
+            debug: false,
+        }
     }
 
-    pub async fn run(&mut self, initial: Option<AgentResponse>) -> Result<(), CoreError> {
-        info!("run: starting server");
-        std::fs::create_dir_all(&self.debug_dir).ok();
+    #[must_use] 
+    pub fn segment_count(&self) -> usize {
+        self.session.read_index().len()
+    }
 
-        if let Some(resp) = initial {
-            self.apply_segments_sorted(&resp.segments);
-            self.last_tick = Some(resp);
+    pub async fn run(&mut self) -> Result<(), CoreError> {
+        info!("run: starting server");
+
+        let mut segments = self.session.read_index();
+        if segments.is_empty() {
+            info!("run: no initial segments, exiting");
+            self.print_banner();
+            return Ok(());
         }
 
-        info!("run: entering tick loop");
-        loop {
-            self.tick().await?;
+        info!("run: {} initial segments, entering tick loop", segments.len());
 
-            if self.tracked.is_empty() {
-                info!("run: no tracked commands left, exiting");
+        loop {
+            let result = {
+                let tick_fut = self.tick(&mut segments);
+                tokio::pin!(tick_fut);
+
+                tokio::select! {
+                    res = &mut tick_fut => Some(res),
+                    _ = tokio::signal::ctrl_c() => {
+                        info!("run: ctrl+c received, exiting");
+                        None
+                    }
+                }
+            };
+
+            match result {
+                None => {
+                    self.session.write_index(&segments);
+                    break;
+                }
+                Some(res) => res?,
+            }
+
+            if segments.is_empty() {
+                info!("run: no segments left, exiting");
                 break;
             }
         }
 
+        self.print_banner();
         Ok(())
     }
 
-    pub async fn tick(&mut self) -> Result<(), CoreError> {
-        self.tick_n += 1;
-        info!("tick #{}: start", self.tick_n);
+    fn print_banner(&self) {
+        let to_resume =
+            format!("  tai server {}  ", self.session.session_path().display());
+        let width = std::cmp::min(50, to_resume.chars().count());
+        let border = "═".repeat(width);
+        println!();
+        println!("╔{:═^width$}╗", " TO RESUME SESSION ");
+        println!("║{:^width$}║", " ");
+        println!("║{to_resume:^width$}║");
+        println!("║{:^width$}║", " ");
+        println!("╚{border}╝");
+    }
 
-        let pending = self.last_tick.as_ref().map(|r| r.segments.clone()).unwrap_or_default();
-        self.debug_write_segments("pending", &pending);
-        self.debug_wait("before apply").await;
+    pub async fn tick(&mut self, segments: &mut Vec<ParsedBlock>) -> Result<(), CoreError> {
+        let tick_n = self.session.read_tick() + 1;
+        self.session.write_tick(tick_n);
+        info!("tick #{tick_n}: start");
 
-        self.apply_segments_sorted(&pending);
+        self.debug_wait("before execute").await;
 
-        let tracked_views = self.run_tracked().await;
-        self.debug_write_views(&tracked_views);
+        let outputs = self.execute_segments(segments).await;
 
-        let prev_response = self.last_tick.take();
-        let state = State::build(tracked_views, prev_response, self.tick_n);
-        info!("tick #{}: state built, calling agent", self.tick_n);
+        let system = self.session.read_system_prompt();
+        let state = State::build(system, segments.clone(), outputs, tick_n);
+        info!("tick #{tick_n}: state built, calling agent");
 
         self.debug_wait("before agent call").await;
 
         let response = self.agent.step(&state).await?;
-        info!("tick #{}: agent responded ({} segments)", self.tick_n, response.segments.len());
+        info!(
+            "tick #{tick_n}: agent responded ({} segments)",
+            response.segments.len()
+        );
 
-        self.debug_write_response(&response);
-        self.last_tick = Some(response);
+        self.session
+            .write_response(&response.reasoning, &serialize_blocks_safe(&response.segments));
 
-        info!("tick #{}: done", self.tick_n);
+        self.session.append_to_mind(&response.reasoning);
+
+        *segments = merge_segments(segments, &response);
+        self.session.write_index(segments);
+
+        for block in &response.segments {
+            if block.mode == BlockMode::Close {
+                self.session.remove_out(&block.window);
+            }
+        }
+
+        info!("tick #{tick_n}: done");
         Ok(())
     }
 
-    fn apply_segments_sorted(&mut self, segments: &[ParsedBlock]) {
-        let mut sorted: Vec<&ParsedBlock> = segments.iter().collect();
-        sorted.sort_by_key(|b| match b.mode {
-            BlockMode::Close => 0,
-            BlockMode::Exec => 1,
-            BlockMode::View => 2,
-        });
-        for block in &sorted {
+    async fn execute_segments(
+        &mut self,
+        segments: &[ParsedBlock],
+    ) -> HashMap<String, crate::backend::CmdOutput> {
+        let mut outputs: HashMap<String, crate::backend::CmdOutput> = HashMap::new();
+
+        let mut ask_blocks: Vec<&ParsedBlock> = Vec::new();
+        let mut exec_blocks: Vec<&ParsedBlock> = Vec::new();
+        let mut view_blocks: Vec<&ParsedBlock> = Vec::new();
+
+        for block in segments {
             match block.mode {
-                BlockMode::Close => {
-                    self.tracked.retain(|tc| tc.title != block.window);
-                    info!("apply: '{}' closed", block.window);
-                }
-                BlockMode::Exec => {
-                    self.upsert_tracked(block.window.clone(), block.content.clone(), false);
-                    info!("apply: '{}' tracked (exec)", block.window);
-                }
-                BlockMode::View => {
-                    self.upsert_tracked(block.window.clone(), block.content.clone(), true);
-                    info!("apply: '{}' tracked (view)", block.window);
-                }
+                BlockMode::Ask => ask_blocks.push(block),
+                BlockMode::Close => {}
+                BlockMode::Exec => exec_blocks.push(block),
+                BlockMode::View => view_blocks.push(block),
             }
         }
-    }
 
-    fn upsert_tracked(&mut self, title: String, command: String, rerun: bool) {
-        if let Some(existing) = self.tracked.iter_mut().find(|tc| tc.title == title) {
-            existing.command = command;
-            existing.rerun = rerun;
-            existing.cached_output = None;
-            existing.cached_exit = None;
-        } else {
-            self.tracked.push(TrackedCmd {
-                title,
-                command,
-                rerun,
-                cached_output: None,
-                cached_exit: None,
-            });
-        }
-    }
-
-    async fn run_tracked(&mut self) -> Vec<TrackedView> {
-        if self.tracked.is_empty() {
-            return Vec::new();
-        }
-
-        self.tracked.sort_by(|a, b| {
-            let order = |rerun: bool| i32::from(rerun);
-            order(a.rerun).cmp(&order(b.rerun))
-        });
-
-        let mut views = Vec::with_capacity(self.tracked.len());
-        for tc in &mut self.tracked {
-            if tc.rerun || tc.cached_output.is_none() {
-                debug!("run_tracked: '{}' executing cmd={}", tc.title, tc.command);
-                let output = self.back.run(&tc.title, &tc.command).await;
-                tc.cached_output = Some(output.stdout);
-                tc.cached_exit = Some(output.exit_code);
+        for block in &ask_blocks {
+            if self.session.has_out(&block.window) {
+                debug!("execute: '{}' ask cached", block.window);
+                if let Some(output) = self.session.read_out(&block.window) {
+                    outputs.insert(block.window.clone(), output);
+                }
             } else {
-                debug!("run_tracked: '{}' using cached output", tc.title);
+                let answer = self.ask_user(&block.content).await;
+                let output = crate::backend::CmdOutput {
+                    exit_code: 0,
+                    stdout: answer,
+                };
+                self.session.write_out(&block.window, &output);
+                outputs.insert(block.window.clone(), output);
             }
-
-            views.push(TrackedView {
-                title: tc.title.clone(),
-                output: tc.cached_output.clone().unwrap_or_default(),
-                exit_code: tc.cached_exit.unwrap_or(0),
-                rerun: tc.rerun,
-            });
         }
 
-        views
+        for block in &exec_blocks {
+            if self.session.has_out(&block.window) {
+                debug!("execute: '{}' cached", block.window);
+                if let Some(output) = self.session.read_out(&block.window) {
+                    outputs.insert(block.window.clone(), output);
+                }
+            } else {
+                debug!("execute: '{}' exec", block.window);
+                let output = self.back.run(&block.window, &block.content).await;
+                self.session.write_out(&block.window, &output);
+                outputs.insert(block.window.clone(), output);
+            }
+        }
+
+        for block in &view_blocks {
+            debug!("execute: '{}' view", block.window);
+            let output = self.back.run(&block.window, &block.content).await;
+            self.session.write_out(&block.window, &output);
+            outputs.insert(block.window.clone(), output);
+        }
+
+        outputs
+    }
+
+    async fn ask_user(&self, question: &str) -> String {
+        use std::io::Write;
+        println!("\n❓ {question}");
+        print!("> ");
+        std::io::stdout().flush().ok();
+        let stdin = tokio::io::stdin();
+        let mut reader = tokio::io::BufReader::new(stdin);
+        let mut answer = String::new();
+        let _ = reader.read_line(&mut answer).await;
+        answer.trim_end().to_string()
     }
 
     async fn debug_wait(&self, point: &str) {
@@ -189,35 +233,30 @@ impl Server {
         let mut lines = reader.lines();
         let _ = lines.next_line().await;
     }
+}
 
-    fn debug_write_views(&self, views: &[TrackedView]) {
-        for v in views {
-            let path = self.debug_dir.join(&v.title);
-            let mut content = String::new();
-            let _ = writeln!(content, "# exit {}", v.exit_code);
-            content.push_str(&v.output);
-            std::fs::write(&path, content).ok();
+fn serialize_blocks_safe(segments: &[crate::types::ParsedBlock]) -> String {
+    use std::fmt::Write;
+    let mut text = String::new();
+    for block in segments {
+        if let Some(prose) = &block.prose {
+            text.push_str(prose);
+            text.push('\n');
+        }
+        match block.mode {
+            BlockMode::Close => {
+                let _ = write!(text, "```{}:close\n```\n", block.window);
+            }
+            BlockMode::Exec => {
+                let _ = write!(text, "```{}:exec\n{}\n```\n", block.window, block.content);
+            }
+            BlockMode::View => {
+                let _ = write!(text, "```{}\n{}\n```\n", block.window, block.content);
+            }
+            BlockMode::Ask => {
+                let _ = write!(text, "```{}:ask\n{}\n```\n", block.window, block.content);
+            }
         }
     }
-
-    fn debug_write_segments(&self, prefix: &str, segments: &[ParsedBlock]) {
-        for block in segments {
-            let filename = format!("{prefix}-{window}", window = block.window);
-            let path = self.debug_dir.join(&filename);
-            let mut content = String::new();
-            let _ = writeln!(content, "# mode={}", block.mode);
-            content.push_str(&block.content);
-            std::fs::write(&path, content).ok();
-        }
-    }
-
-    fn debug_write_response(&self, response: &AgentResponse) {
-        for block in &response.segments {
-            let path = self.debug_dir.join(&block.window);
-            let mut content = String::new();
-            let _ = writeln!(content, "# mode={}", block.mode);
-            content.push_str(&block.content);
-            std::fs::write(&path, content).ok();
-        }
-    }
+    text
 }

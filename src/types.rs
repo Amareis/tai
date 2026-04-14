@@ -5,6 +5,7 @@ pub enum BlockMode {
     View,
     Close,
     Exec,
+    Ask,
 }
 
 impl std::str::FromStr for BlockMode {
@@ -15,6 +16,7 @@ impl std::str::FromStr for BlockMode {
             "close" => Ok(Self::Close),
             "view" | "text" => Ok(Self::View),
             "exec" | "write" => Ok(Self::Exec),
+            "ask" => Ok(Self::Ask),
             _ => Err(format!("unknown block mode: {s}")),
         }
     }
@@ -26,6 +28,7 @@ impl std::fmt::Display for BlockMode {
             BlockMode::View => f.write_str("view"),
             BlockMode::Close => f.write_str("close"),
             BlockMode::Exec => f.write_str("exec"),
+            BlockMode::Ask => f.write_str("ask"),
         }
     }
 }

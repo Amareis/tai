@@ -1,6 +1,7 @@
 use super::{Agent, AgentError, AgentResponse};
+use crate::backend::CmdOutput;
 use crate::response::parse_response;
-use crate::state::{State, TrackedView};
+use crate::state::State;
 use crate::types::BlockMode;
 use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
@@ -12,7 +13,6 @@ use async_trait::async_trait;
 use futures_util::Stream;
 use futures_util::stream::StreamExt;
 use serde_json::Value;
-use std::collections::HashSet;
 use std::pin::Pin;
 use tracing::{debug, error, info, warn};
 
@@ -119,60 +119,19 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
     let mut ms: Vec<ChatCompletionRequestMessage> =
         vec![ChatCompletionRequestSystemMessage::from(state.system.clone()).into()];
 
-    let prev_titles: HashSet<&str> = state
-        .previous_response
-        .as_ref()
-        .map(|resp| resp.segments.iter().map(|b| b.window.as_str()).collect())
-        .unwrap_or_default();
+    for segment in &state.segments {
+        ms.push(render_block_assistant(
+            &segment.window,
+            segment.mode,
+            &segment.content,
+            segment.prose.as_deref(),
+        ));
 
-    let tracked_map: std::collections::HashMap<&str, &TrackedView> = state
-        .tracked
-        .iter()
-        .map(|v| (v.title.as_str(), v))
-        .collect();
-
-    // 1. Persistent windows (not from previous response)
-    for view in &state.tracked {
-        if !prev_titles.contains(view.title.as_str()) {
-            ms.push(render_block_assistant(
-                &view.title,
-                BlockMode::View,
-                "",
-                None,
-            ));
-            ms.push(render_result_user(view));
+        if let Some(output) = state.outputs.get(&segment.window) {
+            ms.push(render_output_user(output));
         }
     }
 
-    // 2. Previous response blocks (interleaved assistant/user)
-    if let Some(prev) = &state.previous_response {
-        if !prev.reasoning.is_empty() {
-            ms.push(render_block_assistant(
-                "REASONING",
-                BlockMode::View,
-                &prev.reasoning,
-                None,
-            ));
-        }
-        for block in &prev.segments {
-            ms.push(render_block_assistant(
-                &block.window,
-                block.mode,
-                &block.content,
-                block.prose.as_deref(),
-            ));
-            if let Some(view) = tracked_map.get(block.window.as_str()) {
-                ms.push(render_result_user(view));
-            }
-        }
-
-        // 3. Outro (trailing prose)
-        if let Some(outro) = &prev.outro {
-            ms.push(ChatCompletionRequestAssistantMessage::from(outro.clone()).into());
-        }
-    }
-
-    // 4. Dashboard
     ms.push(render_dashboard(state));
 
     ms
@@ -203,17 +162,23 @@ fn render_block_assistant(
             let _ =
                 std::fmt::Write::write_fmt(&mut text, format_args!("```{window}\n{content}\n```"));
         }
+        BlockMode::Ask => {
+            let _ = std::fmt::Write::write_fmt(
+                &mut text,
+                format_args!("```{window}:ask\n{content}\n```"),
+            );
+        }
     }
     ChatCompletionRequestAssistantMessage::from(text).into()
 }
 
-fn render_result_user(view: &TrackedView) -> ChatCompletionRequestMessage {
+fn render_output_user(output: &CmdOutput) -> ChatCompletionRequestMessage {
     let mut body = String::new();
-    body.push_str(&view.output);
-    if !view.output.ends_with('\n') && !view.output.is_empty() {
+    body.push_str(&output.stdout);
+    if !output.stdout.ends_with('\n') && !output.stdout.is_empty() {
         body.push('\n');
     }
-    let _ = std::fmt::Write::write_fmt(&mut body, format_args!("exit {}", view.exit_code));
+    let _ = std::fmt::Write::write_fmt(&mut body, format_args!("exit {}", output.exit_code));
     ChatCompletionRequestUserMessage::from(body).into()
 }
 
@@ -225,31 +190,31 @@ fn render_dashboard(state: &State) -> ChatCompletionRequestMessage {
     let mut body = String::from("== Windows ==\n");
     let mut total_tokens: usize = estimate_tokens(&state.system);
 
-    for view in &state.tracked {
-        let lines = view.output.lines().count();
-        let tokens = estimate_tokens(&view.output);
-        total_tokens += tokens;
-        let mode = if view.rerun { "view" } else { "exec" };
-        let status = if view.rerun { "rerun" } else { "cached" };
-        let _ = std::fmt::Write::write_fmt(
-            &mut body,
-            format_args!(
-                "{}: {} lines (~{} tok), {} ({})\n",
-                view.title, lines, tokens, mode, status
-            ),
-        );
-    }
-
-    if let Some(prev) = &state.previous_response {
-        total_tokens += estimate_tokens(&prev.reasoning);
-        for seg in &prev.segments {
-            total_tokens += estimate_tokens(&seg.content);
-            if let Some(prose) = &seg.prose {
+    for segment in &state.segments {
+        if let Some(output) = state.outputs.get(&segment.window) {
+            let lines = output.stdout.lines().count();
+            let tokens = estimate_tokens(&output.stdout);
+            total_tokens += tokens;
+            let mode = match segment.mode {
+                BlockMode::View => "view",
+                BlockMode::Exec => "exec",
+                BlockMode::Close => "close",
+                BlockMode::Ask => "ask",
+            };
+            let cached = segment.mode == BlockMode::Exec || segment.mode == BlockMode::Ask;
+            let status = if cached { "cached" } else { "rerun" };
+            let _ = std::fmt::Write::write_fmt(
+                &mut body,
+                format_args!(
+                    "{}: {} lines (~{} tok), {} ({})\n",
+                    segment.window, lines, tokens, mode, status
+                ),
+            );
+        } else {
+            total_tokens += estimate_tokens(&segment.content);
+            if let Some(prose) = &segment.prose {
                 total_tokens += estimate_tokens(prose);
             }
-        }
-        if let Some(outro) = &prev.outro {
-            total_tokens += estimate_tokens(outro);
         }
     }
 

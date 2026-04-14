@@ -1,0 +1,458 @@
+use crate::agent::AgentResponse;
+use crate::backend::CmdOutput;
+use crate::response::{parse_response, serialize_blocks};
+use crate::types::ParsedBlock;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use tracing::info;
+use uuid::Uuid;
+
+const SYSTEM_PROMPT: &str = include_str!("system_prompt.txt");
+const DEFAULT_MIND: &str = include_str!("default_mind.md");
+const DEFAULT_TAI: &str = include_str!("default_tai.md");
+
+pub struct SessionDir {
+    workspace: PathBuf,
+    internal: PathBuf,
+    project: PathBuf,
+}
+
+impl SessionDir {
+    pub fn create_new(project_dir: &Path, debug: bool) -> Result<Self, std::io::Error> {
+        let id = generate_short_id();
+        let workspace = if debug {
+            project_dir.join(".tai").join(&id)
+        } else {
+            std::env::temp_dir().join(format!("tai-{id}"))
+        };
+
+        let internal = workspace.join(".session");
+        std::fs::create_dir_all(internal.join("out"))?;
+
+        let symlink = workspace.join("work");
+        if !symlink.exists() {
+            std::os::unix::fs::symlink(project_dir, &symlink)?;
+        }
+
+        std::fs::write(internal.join("system-prompt.txt"), SYSTEM_PROMPT)?;
+        std::fs::write(internal.join("tick"), "0")?;
+
+        if !workspace.join("mind.md").exists() {
+            std::fs::write(workspace.join("mind.md"), DEFAULT_MIND)?;
+        }
+
+        let session = Self {
+            workspace,
+            internal,
+            project: project_dir.to_path_buf(),
+        };
+
+        let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
+            .unwrap_or_else(|_| DEFAULT_TAI.to_string());
+        let resp = parse_response(String::new(), &tai_content);
+        session.write_index(&resp.segments);
+
+        info!("session created: {}", session.workspace.display());
+        Ok(session)
+    }
+
+    pub fn open(path: &Path) -> Result<Self, std::io::Error> {
+        let internal = path.join(".session");
+        if !internal.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("not a session directory: {}", path.display()),
+            ));
+        }
+
+        let symlink = path.join("work");
+        let project = if symlink.is_symlink() {
+            std::fs::read_link(&symlink)?
+        } else {
+            std::env::current_dir()?
+        };
+
+        info!("session opened: {}", path.display());
+        Ok(Self {
+            workspace: path.to_path_buf(),
+            internal,
+            project,
+        })
+    }
+
+    pub fn create_or_open(
+        path: Option<&Path>,
+        project_dir: &Path,
+        debug: bool,
+    ) -> Result<Self, std::io::Error> {
+        match path {
+            Some(p) if p.join(".session").is_dir() => Self::open(p),
+            Some(p) => {
+                let session = Self {
+                    workspace: p.to_path_buf(),
+                    internal: p.join(".session"),
+                    project: project_dir.to_path_buf(),
+                };
+                std::fs::create_dir_all(session.internal.join("out"))?;
+                let symlink = session.workspace.join("work");
+                if !symlink.exists() {
+                    std::os::unix::fs::symlink(project_dir, &symlink)?;
+                }
+                std::fs::write(session.internal.join("system-prompt.txt"), SYSTEM_PROMPT)?;
+                std::fs::write(session.internal.join("tick"), "0")?;
+                if !session.workspace.join("mind.md").exists() {
+                    std::fs::write(session.workspace.join("mind.md"), DEFAULT_MIND)?;
+                }
+                let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
+                    .unwrap_or_else(|_| DEFAULT_TAI.to_string());
+                let resp = parse_response(String::new(), &tai_content);
+                session.write_index(&resp.segments);
+                info!("session created at: {}", p.display());
+                Ok(session)
+            }
+            None => Self::create_new(project_dir, debug),
+        }
+    }
+
+    #[must_use]
+    pub fn read_index(&self) -> Vec<ParsedBlock> {
+        let path = self.internal.join("index.md");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let resp = parse_response(String::new(), &text);
+                resp.segments
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn write_index(&self, segments: &[ParsedBlock]) {
+        let text = serialize_blocks(segments);
+        let path = self.internal.join("index.md");
+        std::fs::write(&path, text).ok();
+    }
+
+    #[must_use]
+    pub fn read_out(&self, title: &str) -> Option<CmdOutput> {
+        let path = self.internal.join("out").join(format!("{title}.out"));
+        let raw = std::fs::read_to_string(&path).ok()?;
+        let (exit_code, stdout) = parse_out_file(&raw);
+        Some(CmdOutput { exit_code, stdout })
+    }
+
+    pub fn write_out(&self, title: &str, output: &CmdOutput) {
+        let path = self.internal.join("out").join(format!("{title}.out"));
+        let content = format!("exit {}\n{}", output.exit_code, output.stdout);
+        std::fs::write(&path, content).ok();
+    }
+
+    pub fn remove_out(&self, title: &str) {
+        let path = self.internal.join("out").join(format!("{title}.out"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[must_use]
+    pub fn has_out(&self, title: &str) -> bool {
+        self.internal
+            .join("out")
+            .join(format!("{title}.out"))
+            .exists()
+    }
+
+    #[must_use]
+    pub fn read_tick(&self) -> u64 {
+        let path = self.internal.join("tick");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0)
+    }
+
+    pub fn write_tick(&self, n: u64) {
+        let path = self.internal.join("tick");
+        std::fs::write(&path, n.to_string()).ok();
+    }
+
+    #[must_use]
+    pub fn read_system_prompt(&self) -> String {
+        let path = self.internal.join("system-prompt.txt");
+        std::fs::read_to_string(&path).unwrap_or_else(|_| SYSTEM_PROMPT.to_string())
+    }
+
+    #[must_use]
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
+    #[must_use]
+    pub fn session_path(&self) -> &Path {
+        &self.workspace
+    }
+
+    #[must_use]
+    pub fn project(&self) -> &Path {
+        &self.project
+    }
+
+    #[must_use]
+    pub fn read_all_outputs(
+        &self,
+        segments: &[ParsedBlock],
+    ) -> std::collections::HashMap<String, CmdOutput> {
+        let mut outputs = std::collections::HashMap::new();
+        for block in segments {
+            if block.mode == BlockMode::Close {
+                continue;
+            }
+            if let Some(output) = self.read_out(&block.window) {
+                outputs.insert(block.window.clone(), output);
+            }
+        }
+        outputs
+    }
+
+    pub fn write_response(&self, reasoning: &str, text: &str) {
+        let mut content = String::new();
+        if !reasoning.is_empty() {
+            content.push_str(reasoning);
+            content.push_str("\n\n");
+        }
+        content.push_str(text);
+        let path = self.internal.join("response.md");
+        std::fs::write(&path, content).ok();
+    }
+
+    pub fn append_to_mind(&self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let path = self.workspace.join("mind.md");
+        let mut content = std::fs::read_to_string(&path).unwrap_or_default();
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str("\n## Reasoning\n\n");
+        content.push_str(text);
+        content.push('\n');
+        std::fs::write(&path, content).ok();
+    }
+}
+
+fn parse_out_file(raw: &str) -> (i32, String) {
+    let first_line = raw.lines().next().unwrap_or("exit 0");
+    let rest = if raw.len() > first_line.len() + 1 {
+        raw[first_line.len() + 1..].to_string()
+    } else {
+        String::new()
+    };
+
+    let exit_code = if let Some(code_str) = first_line.strip_prefix("exit ") {
+        code_str.trim().parse::<i32>().unwrap_or(0)
+    } else if let Some(sig_str) = first_line.strip_prefix("signal ") {
+        sig_str.trim().parse::<i32>().unwrap_or(-1)
+    } else {
+        0
+    };
+
+    (exit_code, rest)
+}
+
+#[must_use]
+pub fn merge_segments(old: &[ParsedBlock], response: &AgentResponse) -> Vec<ParsedBlock> {
+    let mut closed: HashSet<String> = HashSet::new();
+    let mut updated: HashSet<String> = HashSet::new();
+
+    for block in &response.segments {
+        match block.mode {
+            BlockMode::Close => {
+                closed.insert(block.window.clone());
+            }
+            _ => {
+                updated.insert(block.window.clone());
+            }
+        }
+    }
+
+    let mut result: Vec<ParsedBlock> = Vec::new();
+
+    for block in old {
+        if !closed.contains(&block.window) && !updated.contains(&block.window) {
+            result.push(ParsedBlock {
+                prose: None,
+                ..block.clone()
+            });
+        }
+    }
+
+    for block in &response.segments {
+        if block.mode != BlockMode::Close {
+            result.push(block.clone());
+        }
+    }
+
+    result
+}
+
+const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+
+fn generate_short_id() -> String {
+    let uuid = Uuid::new_v4();
+    let bytes = uuid.as_bytes();
+    bytes
+        .iter()
+        .take(6)
+        .map(|b| {
+            let idx = usize::from(*b) % CHARSET.len();
+            char::from(CHARSET.get(idx).copied().unwrap_or(b'a'))
+        })
+        .collect()
+}
+
+use crate::types::BlockMode;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::BlockMode;
+
+    #[test]
+    fn test_parse_out_file_exit() {
+        let (code, stdout) = parse_out_file("exit 0\nhello\nworld");
+        assert_eq!(code, 0);
+        assert_eq!(stdout, "hello\nworld");
+    }
+
+    #[test]
+    fn test_parse_out_file_error() {
+        let (code, stdout) = parse_out_file("exit 1\nerror msg");
+        assert_eq!(code, 1);
+        assert_eq!(stdout, "error msg");
+    }
+
+    #[test]
+    fn test_parse_out_file_signal() {
+        let (code, _stdout) = parse_out_file("signal 9\n");
+        assert_eq!(code, 9);
+    }
+
+    #[test]
+    fn test_parse_out_file_empty() {
+        let (code, stdout) = parse_out_file("exit 0\n");
+        assert_eq!(code, 0);
+        assert_eq!(stdout, "");
+    }
+
+    #[test]
+    fn test_merge_basic() {
+        let old = vec![
+            ParsedBlock {
+                window: "mind".into(),
+                mode: BlockMode::View,
+                content: "cat mind.md".into(),
+                prose: None,
+            },
+            ParsedBlock {
+                window: "tree".into(),
+                mode: BlockMode::View,
+                content: "tree".into(),
+                prose: None,
+            },
+        ];
+
+        let response = AgentResponse::block("build", BlockMode::View, "cargo build");
+
+        let merged = merge_segments(&old, &response);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].window, "mind");
+        assert_eq!(merged[1].window, "tree");
+        assert_eq!(merged[2].window, "build");
+        assert!(merged[2].prose.is_none());
+    }
+
+    #[test]
+    fn test_merge_close() {
+        let old = vec![
+            ParsedBlock {
+                window: "mind".into(),
+                mode: BlockMode::View,
+                content: "cat mind.md".into(),
+                prose: None,
+            },
+            ParsedBlock {
+                window: "build".into(),
+                mode: BlockMode::View,
+                content: "cargo build".into(),
+                prose: None,
+            },
+        ];
+
+        let response = AgentResponse::block("build", BlockMode::Close, "");
+
+        let merged = merge_segments(&old, &response);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].window, "mind");
+    }
+
+    #[test]
+    fn test_merge_replace() {
+        let old = vec![ParsedBlock {
+            window: "build".into(),
+            mode: BlockMode::View,
+            content: "cargo build".into(),
+            prose: Some("old prose".into()),
+        }];
+
+        let response = AgentResponse::block("build", BlockMode::Exec, "cargo build --release");
+
+        let merged = merge_segments(&old, &response);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].window, "build");
+        assert_eq!(merged[0].content, "cargo build --release");
+        assert_eq!(merged[0].mode, BlockMode::Exec);
+    }
+
+    #[test]
+    fn test_merge_old_loses_prose() {
+        let old = vec![ParsedBlock {
+            window: "mind".into(),
+            mode: BlockMode::View,
+            content: "cat mind.md".into(),
+            prose: Some("checking mind".into()),
+        }];
+
+        let response = AgentResponse::block("build", BlockMode::View, "cargo build");
+
+        let merged = merge_segments(&old, &response);
+        assert_eq!(merged.len(), 2);
+        assert!(merged[0].prose.is_none());
+        assert!(merged[1].prose.is_none());
+    }
+
+    #[test]
+    fn test_roundtrip_serialize_parse() {
+        let blocks = vec![
+            ParsedBlock {
+                window: "mind".into(),
+                mode: BlockMode::View,
+                content: "cat mind.md".into(),
+                prose: Some("checking state".into()),
+            },
+            ParsedBlock {
+                window: "install".into(),
+                mode: BlockMode::Exec,
+                content: "cargo add serde".into(),
+                prose: None,
+            },
+        ];
+
+        let text = serialize_blocks(&blocks);
+        let parsed = parse_response(String::new(), &text);
+        assert_eq!(parsed.segments.len(), 2);
+        assert_eq!(parsed.segments[0].window, "mind");
+        assert_eq!(parsed.segments[0].mode, BlockMode::View);
+        assert_eq!(parsed.segments[0].content, "cat mind.md");
+        assert_eq!(parsed.segments[0].prose.as_deref(), Some("checking state"));
+        assert_eq!(parsed.segments[1].window, "install");
+        assert_eq!(parsed.segments[1].mode, BlockMode::Exec);
+    }
+}

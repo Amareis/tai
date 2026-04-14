@@ -20,16 +20,7 @@
 
 ## How to Update Mind
 
-Use an `:exec` block with a heredoc to rewrite this file:
-
-```
-```update-mind:exec
-cat > mind.md << 'EOF'
-# Mind — Agent Working Memory
-... updated content ...
-EOF
-```
-```
+Use an `:exec` block with a heredoc to rewrite this file.
 
 Update mind.md whenever you:
 - Complete a significant step

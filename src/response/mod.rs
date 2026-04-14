@@ -18,6 +18,44 @@ enum ParsedSegment {
 }
 
 #[must_use]
+pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
+    let mut text = String::new();
+    for block in segments {
+        if let Some(prose) = &block.prose {
+            text.push_str(prose);
+            text.push('\n');
+        }
+        match block.mode {
+            BlockMode::Close => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("```{}:close\n```\n", block.window),
+                );
+            }
+            BlockMode::Exec => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("```{}:exec\n{}\n```\n", block.window, block.content),
+                );
+            }
+            BlockMode::View => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("```{}\n{}\n```\n", block.window, block.content),
+                );
+            }
+            BlockMode::Ask => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("```{}:ask\n{}\n```\n", block.window, block.content),
+                );
+            }
+        }
+    }
+    text
+}
+
+#[must_use]
 pub fn parse_response(reasoning: String, input: &str) -> AgentResponse {
     let raw = parse_response_segments(input);
 
