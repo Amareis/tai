@@ -1,12 +1,12 @@
-use crate::agent::{Agent, AgentResponse};
+use crate::agent::{Agent};
 use crate::backend::Backend;
 use crate::session::SessionDir;
 use crate::state::State;
 use crate::types::{BlockMode, ParsedBlock};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -15,6 +15,9 @@ pub enum CoreError {
 
     #[error("agent error: {0}")]
     Agent(#[from] crate::agent::AgentError),
+
+    #[error("Ctrl-C received")]
+    Interrupted,
 }
 
 pub struct Server {
@@ -58,42 +61,56 @@ impl Server {
     pub async fn run(&mut self) -> Result<(), CoreError> {
         info!("run: starting server");
 
-        let mut segments = self.session.read_index();
-        if segments.is_empty() {
-            info!("run: no initial segments, exiting");
-            self.print_banner();
-            return Ok(());
-        }
+        let mut state = {
+            let segments = self.session.read_index();
+            let system = self.session.read_system_prompt().await;
+            let tick = self.session.read_tick(1).await;
+            let response = self.session.read_response().unwrap_or_default();
+
+            State::build(system, segments, HashMap::new(), tick, response)
+        };
 
         info!(
             "run: {} initial segments, entering tick loop",
-            segments.len()
+            state.segments.len()
         );
 
         loop {
+            state.system = self.session.read_system_prompt().await;
+
             let result = {
-                let tick_fut = self.tick(&mut segments);
+                let tick_fut = self.tick(state);
                 tokio::pin!(tick_fut);
 
                 tokio::select! {
-                    res = &mut tick_fut => Some(res),
+                    res = &mut tick_fut => res,
                     _ = tokio::signal::ctrl_c() => {
                         info!("run: ctrl+c received, exiting");
-                        None
+                        Err(CoreError::Interrupted)
                     }
                 }
             };
 
             match result {
-                None => {
-                    self.session.write_index(&segments);
+                Err(e) => {
+                    if !matches!(e, CoreError::Interrupted) {
+                        warn!("tick error: {}", e);
+                    }
                     break;
                 }
-                Some(res) => res?,
+                Ok(s) => state = s,
             }
 
-            if segments.is_empty() {
-                info!("run: no segments left, exiting");
+            self.session.write_response(&state.response);
+
+            // todo move to tick somehow
+            self.session.append_to_mind(&state.response.reasoning);
+
+            self.session.write_index(&state.segments);
+
+            self.session.write_tick(state.tick_n);
+
+            if state.segments.is_empty() {
                 break;
             }
         }
@@ -114,18 +131,20 @@ impl Server {
         println!("╚{border}╝");
     }
 
-    pub async fn tick(&mut self, segments: &mut Vec<ParsedBlock>) -> Result<(), CoreError> {
-        let tick_n = self.session.read_tick() + 1;
-        self.session.write_tick(tick_n);
+    pub async fn tick(&mut self, mut state: State) -> Result<State, CoreError> {
+        let tick_n = state.tick_n;
         info!("tick #{tick_n}: start");
 
-        self.debug_wait("before execute").await;
+        self.debug_wait("before update_state").await;
 
-        let outputs = self.execute_segments(segments).await;
+        self.update_state(&mut state).await;
 
-        let system = self.session.read_system_prompt();
-        let state = State::build(system, segments.clone(), outputs, tick_n);
-        info!("tick #{tick_n}: state built, calling agent");
+        if state.segments.is_empty() {
+            info!("tick #{tick_n}: state updated, no segments left, exiting");
+            return Ok(state);
+        }
+
+        info!("tick #{tick_n}: state updated, calling agent");
 
         self.debug_wait("before agent call").await;
 
@@ -134,136 +153,105 @@ impl Server {
             "tick #{tick_n}: agent responded ({} segments)",
             response.segments.len()
         );
-
-        self.session.write_response(&response);
-
-        self.session.append_to_mind(&response.reasoning);
-
-        *segments = merge_segments(segments, &response);
-        self.session.write_index(segments);
+        state.response = response;
+        state.tick_n += 1;
 
         info!("tick #{tick_n}: done");
-        Ok(())
+        Ok(state)
     }
 
-    async fn execute_segments(
-        &mut self,
-        segments: &[ParsedBlock],
-    ) -> HashMap<String, crate::backend::CmdOutput> {
-        let mut outputs: HashMap<String, crate::backend::CmdOutput> = HashMap::new();
-
+    async fn update_state(&self, state: &mut State) {
+        let State {
+            response,
+            outputs,
+            segments,
+            ..
+        } = state;
         let mut ask_blocks: Vec<&ParsedBlock> = Vec::new();
         let mut exec_blocks: Vec<&ParsedBlock> = Vec::new();
         let mut view_blocks: Vec<&ParsedBlock> = Vec::new();
 
-        for block in segments {
+        for block in &response.segments {
             match block.mode {
                 BlockMode::Ask => ask_blocks.push(block),
                 BlockMode::Close => {
                     self.session.remove_out(&block.window);
+                    outputs.remove(&block.window);
+                    segments.retain(|s| s.window != block.window);
                 }
                 BlockMode::Exec => exec_blocks.push(block),
                 BlockMode::View => view_blocks.push(block),
             }
         }
 
-        for block in &ask_blocks {
-            if self.session.has_out(&block.window) {
+        for block in ask_blocks {
+            if let Some(output) = self.session.read_out(&block.window) {
                 debug!("execute: '{}' ask cached", block.window);
-                if let Some(output) = self.session.read_out(&block.window) {
-                    outputs.insert(block.window.clone(), output);
-                }
+                outputs.insert(block.window.clone(), output);
             } else {
-                let answer = self.ask_user(&block.content).await;
+                let answer = ask_user(&block.content).await;
+                info!("answer: '{}'", answer);
                 let output = crate::backend::CmdOutput {
                     exit_code: 0,
                     stdout: answer,
                 };
                 self.session.write_out(&block.window, &output);
                 outputs.insert(block.window.clone(), output);
+                segments.push(block.clone());
             }
         }
 
-        for block in &exec_blocks {
-            if self.session.has_out(&block.window) {
+        for block in exec_blocks {
+            if let Some(output) = self.session.read_out(&block.window) {
                 debug!("execute: '{}' cached", block.window);
-                if let Some(output) = self.session.read_out(&block.window) {
-                    outputs.insert(block.window.clone(), output);
-                }
+                outputs.insert(block.window.clone(), output);
             } else {
                 debug!("execute: '{}' exec", block.window);
                 let output = self.back.run(&block.window, &block.content).await;
                 self.session.write_out(&block.window, &output);
                 outputs.insert(block.window.clone(), output);
+                segments.push(block.clone());
             }
         }
 
-        for block in &view_blocks {
-            debug!("execute: '{}' view", block.window);
-            let output = self.back.run(&block.window, &block.content).await;
-            self.session.write_out(&block.window, &output);
-            outputs.insert(block.window.clone(), output);
+        for block in view_blocks {
+            segments.push(block.clone());
         }
 
-        outputs
-    }
-
-    async fn ask_user(&self, question: &str) -> String {
-        use std::io::Write;
-        println!("\n❓ {question}");
-        print!("> ");
-        std::io::stdout().flush().ok();
-        let stdin = tokio::io::stdin();
-        let mut reader = BufReader::new(stdin);
-        let mut answer = String::new();
-        let _ = reader.read_line(&mut answer).await;
-        answer.trim_end().to_string()
+        for block in segments {
+            if block.mode == BlockMode::View {
+                debug!("execute: '{}' view", block.window);
+                let output = self.back.run(&block.window, &block.content).await;
+                self.session.write_out(&block.window, &output);
+                outputs.insert(block.window.clone(), output);
+            }
+        }
     }
 
     async fn debug_wait(&self, point: &str) {
         if !self.debug {
             return;
         }
-        info!("debug: press Enter to continue ({point})...");
-        let stdin = tokio::io::stdin();
-        let reader = BufReader::new(stdin);
-        let mut lines = reader.lines();
-        let _ = lines.next_line().await;
+        println!("debug ({point}): press Enter to continue...");
+        read_line().await;
     }
 }
 
-#[must_use]
-fn merge_segments(old: &[ParsedBlock], response: &AgentResponse) -> Vec<ParsedBlock> {
-    let mut closed: HashSet<String> = HashSet::new();
-    let mut updated: HashSet<String> = HashSet::new();
+async fn ask_user(question: &str) -> String {
+    use std::io::Write;
+    println!("\n❓ {question}");
+    print!("> ");
+    std::io::stdout().flush().ok();
+    read_line().await.trim_end().to_string()
+}
 
-    for block in &response.segments {
-        match block.mode {
-            BlockMode::Close => {
-                closed.insert(block.window.clone());
-            }
-            _ => {
-                updated.insert(block.window.clone());
-            }
-        }
-    }
-
-    let mut result: Vec<ParsedBlock> = Vec::new();
-
-    for block in old {
-        if !closed.contains(&block.window) && !updated.contains(&block.window) {
-            result.push(ParsedBlock {
-                prose: None,
-                ..block.clone()
-            });
-        }
-    }
-
-    for block in &response.segments {
-        if block.mode != BlockMode::Close {
-            result.push(block.clone());
-        }
-    }
-
-    result
+async fn read_line() -> String {
+    let stdin = tokio::io::stdin();
+    let reader = BufReader::new(stdin);
+    let mut lines = reader.lines();
+    lines
+        .next_line()
+        .await
+        .unwrap_or_else(|e| Some(e.to_string()))
+        .unwrap_or_else(|| "NONE".to_string())
 }

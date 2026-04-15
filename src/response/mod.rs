@@ -56,7 +56,7 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
 }
 
 #[must_use]
-pub fn parse_response(reasoning: String, input: &str) -> AgentResponse {
+pub fn parse_response(input: &str) -> AgentResponse {
     let raw = parse_response_segments(input);
 
     let mut blocks: Vec<ParsedBlock> = Vec::new();
@@ -90,7 +90,7 @@ pub fn parse_response(reasoning: String, input: &str) -> AgentResponse {
     let outro = prose_buf.filter(|s| !s.is_empty());
 
     AgentResponse {
-        reasoning,
+        reasoning: String::new(),
         segments: blocks,
         outro,
     }
@@ -560,7 +560,7 @@ cat src/main.rs
         ];
 
         let text = serialize_blocks(&blocks);
-        let parsed = parse_response(String::new(), &text);
+        let parsed = parse_response(&text);
         assert_eq!(parsed.segments.len(), 2);
         assert_eq!(parsed.segments[0].window, "mind");
         assert_eq!(parsed.segments[0].mode, BlockMode::View);

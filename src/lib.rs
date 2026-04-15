@@ -39,6 +39,7 @@ pub async fn run_server(
     agent.debug = debug;
     let mut server = create_server(session, agent)?;
     server.debug = debug;
+
     if let Err(e) = server.run().await {
         error!("Server run error: {}", e);
     }

@@ -101,7 +101,7 @@ impl Agent for LlmAgent {
             reasoning.len()
         );
 
-        let resp = parse_response(reasoning, &text);
+        let resp = parse_response(&text).with_reasoning(&reasoning);
 
         info!("llm step: parsed {} segments", resp.segments.len());
 

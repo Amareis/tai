@@ -1,6 +1,7 @@
 use crate::backend::CmdOutput;
 use crate::types::ParsedBlock;
 use std::collections::HashMap;
+use crate::agent::AgentResponse;
 
 #[derive(Debug, Clone, Default)]
 pub struct State {
@@ -8,6 +9,7 @@ pub struct State {
     pub segments: Vec<ParsedBlock>,
     pub outputs: HashMap<String, CmdOutput>,
     pub tick_n: u64,
+    pub response: AgentResponse,
 }
 
 impl State {
@@ -17,12 +19,14 @@ impl State {
         segments: Vec<ParsedBlock>,
         outputs: HashMap<String, CmdOutput>,
         tick_n: u64,
+        response: AgentResponse,
     ) -> Self {
         Self {
             system,
             segments,
             outputs,
             tick_n,
+            response,
         }
     }
 }

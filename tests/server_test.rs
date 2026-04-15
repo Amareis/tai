@@ -32,7 +32,7 @@ async fn tick_empty_session() {
     let session = test_session();
     let agent = TestAgent::new().add_step(
         |_state: &State| {},
-        AgentResponse::empty(),
+        AgentResponse::new(),
     );
 
     let mut server = test_server(session, agent);
@@ -87,7 +87,7 @@ async fn close_removes_from_tracked() {
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::empty(),
+            AgentResponse::new(),
         );
 
     let mut server = test_server(session, agent);

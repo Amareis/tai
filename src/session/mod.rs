@@ -48,8 +48,8 @@ impl SessionDir {
 
         let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
             .unwrap_or_else(|_| DEFAULT_TAI.to_string());
-        let resp = parse_response(String::new(), &tai_content);
-        session.write_index(&resp.segments);
+        let resp = parse_response(&tai_content);
+        session.write_response(&resp);
 
         info!("session created: {}", session.workspace.display());
         Ok(session)
@@ -104,8 +104,8 @@ impl SessionDir {
                 }
                 let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
                     .unwrap_or_else(|_| DEFAULT_TAI.to_string());
-                let resp = parse_response(String::new(), &tai_content);
-                session.write_index(&resp.segments);
+                let resp = parse_response(&tai_content);
+                session.write_response(&resp);
                 info!("session created at: {}", p.display());
                 Ok(session)
             }
@@ -118,8 +118,7 @@ impl SessionDir {
         let path = self.internal.join("index.md");
         match std::fs::read_to_string(&path) {
             Ok(text) => {
-                let resp = parse_response(String::new(), &text);
-                resp.segments
+                parse_response(&text).segments
             }
             Err(_) => Vec::new(),
         }
@@ -159,12 +158,13 @@ impl SessionDir {
     }
 
     #[must_use]
-    pub fn read_tick(&self) -> u64 {
+    pub async fn read_tick(&self, default: u64) -> u64 {
         let path = self.internal.join("tick");
-        std::fs::read_to_string(&path)
+        tokio::fs::read_to_string(&path)
+            .await
             .ok()
             .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0)
+            .unwrap_or(default)
     }
 
     pub fn write_tick(&self, n: u64) {
@@ -173,9 +173,11 @@ impl SessionDir {
     }
 
     #[must_use]
-    pub fn read_system_prompt(&self) -> String {
+    pub async fn read_system_prompt(&self) -> String {
         let path = self.internal.join("system-prompt.txt");
-        std::fs::read_to_string(&path).unwrap_or_else(|_| SYSTEM_PROMPT.to_string())
+        tokio::fs::read_to_string(&path)
+            .await
+            .unwrap_or_else(|_| SYSTEM_PROMPT.to_string())
     }
 
     #[must_use]
@@ -211,19 +213,17 @@ impl SessionDir {
     }
 
     pub fn write_response(&self, response: &AgentResponse) {
-        let mut content = String::new();
-        if !response.reasoning.is_empty() {
-            content.push_str(&response.reasoning);
-            content.push_str("\n\n");
-        }
-        content.push_str(&serialize_blocks(&response.segments));
-        if let Some(outro) = &response.outro {
-            content.push('\n');
-            content.push_str(outro);
-        }
-        content.push('\n');
         let path = self.internal.join("response.md");
-        std::fs::write(&path, content).ok();
+        std::fs::write(
+            &path,
+            toml::to_string(response).unwrap_or_else(|e| e.to_string()),
+        )
+        .ok();
+    }
+    #[must_use]
+    pub fn read_response(&self) -> Option<AgentResponse> {
+        let path = self.internal.join("response.md");
+        toml::from_str(&std::fs::read_to_string(path).ok()?).ok()
     }
 
     pub fn append_to_mind(&self, text: &str) {

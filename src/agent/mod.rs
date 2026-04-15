@@ -21,7 +21,7 @@ pub trait Agent: Send + Sync {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentResponse {
     pub reasoning: String,
     pub segments: Vec<ParsedBlock>,
@@ -30,12 +30,8 @@ pub struct AgentResponse {
 
 impl AgentResponse {
     #[must_use]
-    pub fn empty() -> Self {
-        Self {
-            reasoning: String::new(),
-            segments: Vec::new(),
-            outro: None,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     #[must_use]
@@ -57,6 +53,12 @@ impl AgentResponse {
         self.segments.extend(other.segments);
         self
     }
+
+    #[must_use]
+    pub fn with_reasoning(mut self, reasoning: &str) -> Self {
+        self.reasoning = reasoning.to_string();
+        self
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -74,7 +76,7 @@ pub struct NopAgent;
 #[async_trait]
 impl Agent for NopAgent {
     async fn step(&self, _state: &State) -> Result<AgentResponse, AgentError> {
-        Ok(AgentResponse::empty())
+        Ok(AgentResponse::new())
     }
 }
 
