@@ -49,11 +49,7 @@ async fn tick_agent_runs_command() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block(
-                "build",
-                BlockMode::View,
-                "echo marker-xyz",
-            ),
+            AgentResponse::block("build", BlockMode::Watch, "echo marker-xyz"),
         )
         .add_step(
             |state: &State| {
@@ -67,6 +63,7 @@ async fn tick_agent_runs_command() {
     let mut server = test_server(session, agent);
     let state = State::default();
     let state = server.tick(state).await.unwrap();
+    assert_eq!(state.segments.len(), 1);
     server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
@@ -79,15 +76,11 @@ async fn close_removes_from_tracked() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("build", BlockMode::View, "echo hello"),
+            AgentResponse::block("build", BlockMode::Watch, "echo hello"),
         )
         .add_step(
             |_state: &State| {},
             AgentResponse::block("build", BlockMode::Close, ""),
-        )
-        .add_step(
-            |_state: &State| {},
-            AgentResponse::new(),
         );
 
     let mut server = test_server(session, agent);
@@ -96,7 +89,6 @@ async fn close_removes_from_tracked() {
     assert_eq!(state.segments.len(), 1);
     let state = server.tick(state).await.unwrap();
     assert_eq!(state.segments.len(), 0);
-    server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -122,6 +114,7 @@ async fn exec_runs_once_then_caches() {
     let mut server = test_server(session, agent);
     let state = State::default();
     let state = server.tick(state).await.unwrap();
+    assert_eq!(state.segments.len(), 1);
     server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
@@ -134,11 +127,11 @@ async fn upsert_replaces_existing_title() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("build", BlockMode::View, "echo first"),
+            AgentResponse::block("build", BlockMode::Watch, "echo first"),
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("build", BlockMode::View, "echo second"),
+            AgentResponse::block("build", BlockMode::Watch, "echo second"),
         )
         .add_step(
             |state: &State| {
@@ -156,8 +149,101 @@ async fn upsert_replaces_existing_title() {
     assert_eq!(state.segments.len(), 1);
     let state = server.tick(state).await.unwrap();
     assert_eq!(state.segments.len(), 1);
+    server.tick(state).await.unwrap();
+
+    assert_test_agent(&server);
+}
+
+#[tokio::test]
+#[traced_test]
+async fn write_mode_creates_file() {
+    let session = test_session();
+    let agent = TestAgent::new()
+        .add_step(
+            |_state: &State| {},
+            AgentResponse::block("test-file.txt", BlockMode::Write, "hello world"),
+        )
+        .add_step(
+            |state: &State| {
+                let output = state.outputs.get("test-file.txt");
+                assert!(output.is_some(), "expected test-file.txt in outputs");
+                let stdout = &output.unwrap().stdout;
+                assert!(stdout.contains("hello world"), "expected 'hello world' in output, got: {stdout}");
+            },
+            AgentResponse::block("test-file.txt", BlockMode::Close, ""),
+        );
+
+    let mut server = test_server(session, agent);
+    let state = State::default();
     let state = server.tick(state).await.unwrap();
-    assert_eq!(state.segments.len(), 0);
+    assert_eq!(state.segments.len(), 1);
+    server.tick(state).await.unwrap();
+
+    assert_test_agent(&server);
+}
+
+#[tokio::test]
+#[traced_test]
+async fn edit_mode_modifies_file() {
+    let session = test_session();
+
+    let agent = TestAgent::new()
+        .add_step(
+            |_state: &State| {},
+            AgentResponse::block("edit-test.txt", BlockMode::Write, "line one\nline two\nline three"),
+        )
+        .add_step(
+            |_state: &State| {},
+            AgentResponse::block("edit-test.txt", BlockMode::Edit, "2c\nREPLACED"),
+        )
+        .add_step(
+            |state: &State| {
+                let output = state.outputs.get("edit-test.txt");
+                assert!(output.is_some(), "expected edit-test.txt in outputs");
+                let stdout = &output.unwrap().stdout;
+                assert!(stdout.contains("REPLACED"), "expected 'REPLACED' in output, got: {stdout}");
+                assert!(!stdout.contains("line two"), "should not contain 'line two', got: {stdout}");
+            },
+            AgentResponse::block("edit-test.txt", BlockMode::Close, ""),
+        );
+
+    let mut server = test_server(session, agent);
+    let state = State::default();
+    let state = server.tick(state).await.unwrap();
+    let state = server.tick(state).await.unwrap();
+    server.tick(state).await.unwrap();
+
+    assert_test_agent(&server);
+}
+
+#[tokio::test]
+#[traced_test]
+async fn file_mode_shows_file() {
+    let session = test_session();
+
+    let agent = TestAgent::new()
+        .add_step(
+            |_state: &State| {},
+            AgentResponse::block("file-test.txt", BlockMode::Write, "file content here"),
+        )
+        .add_step(
+            |_state: &State| {},
+            AgentResponse::block("file-test.txt", BlockMode::File, ""),
+        )
+        .add_step(
+            |state: &State| {
+                let output = state.outputs.get("file-test.txt");
+                assert!(output.is_some(), "expected file-test.txt in outputs");
+                assert!(output.unwrap().stdout.contains("file content here"));
+            },
+            AgentResponse::block("file-test.txt", BlockMode::Close, ""),
+        );
+
+    let mut server = test_server(session, agent);
+    let state = State::default();
+    let state = server.tick(state).await.unwrap();
+    let state = server.tick(state).await.unwrap();
+    server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
 }

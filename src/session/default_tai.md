@@ -1,21 +1,21 @@
 Current project structure.
 
-```tree
+```watch:tree
 tree -l --gitignore
 ```
 
 Working memory — persistent across ticks, updated via :exec.
 
-```mind
+```watch:mind
 cat mind.md
 ```
 
 Project conventions and architecture reference.
 
-```agents
+```watch:agents
 cat work/AGENTS.md
 ```
 
-```task:ask
+```ask:task
 What we do today?
 ```

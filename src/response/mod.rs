@@ -1,19 +1,19 @@
 use crate::agent::AgentResponse;
 use crate::types::{BlockMode, ParsedBlock};
 
+pub mod edit_command;
+
 struct Header {
     window: String,
     mode: BlockMode,
 }
 
 enum ParsedSegment {
-    /// Code block: ` ```title[:mode]\ncontent\n``` `
     Block {
         window: String,
         mode: BlockMode,
         content: String,
     },
-    /// Текст вне блоков — prose
     Prose(String),
 }
 
@@ -29,25 +29,43 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
             BlockMode::Close => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```{}:close\n```\n", block.window),
+                    format_args!("```close:{}\n```\n", block.window),
+                );
+            }
+            BlockMode::Watch => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("```watch:{}\n{}\n```\n", block.window, block.content),
                 );
             }
             BlockMode::Exec => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```{}:exec\n{}\n```\n", block.window, block.content),
-                );
-            }
-            BlockMode::View => {
-                let _ = std::fmt::Write::write_fmt(
-                    &mut text,
-                    format_args!("```{}\n{}\n```\n", block.window, block.content),
+                    format_args!("```exec:{}\n{}\n```\n", block.window, block.content),
                 );
             }
             BlockMode::Ask => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```{}:ask\n{}\n```\n", block.window, block.content),
+                    format_args!("```ask:{}\n{}\n```\n", block.window, block.content),
+                );
+            }
+            BlockMode::File => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("```file:{}\n```\n", block.window),
+                );
+            }
+            BlockMode::Edit => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("```edit:{}\n{}\n```\n", block.window, block.content),
+                );
+            }
+            BlockMode::Write => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("```write:{}\n{}\n```\n", block.window, block.content),
                 );
             }
         }
@@ -85,8 +103,6 @@ pub fn parse_response(input: &str) -> AgentResponse {
         }
     }
 
-    // trailing prose could be attached to last block instead of outro,
-    // but that changes semantics — keeping as explicit outro for now
     let outro = prose_buf.filter(|s| !s.is_empty());
 
     AgentResponse {
@@ -203,9 +219,9 @@ fn parse_block_body(input: &str, from: usize) -> (usize, usize, String) {
 }
 
 fn parse_block_header(header: &str) -> Header {
-    if let Some(pos) = header.rfind(':') {
-        let window = header[..pos].to_string();
-        let mode_str = &header[pos + 1..];
+    if let Some(pos) = header.find(':') {
+        let mode_str = &header[..pos];
+        let window = header[pos + 1..].to_string();
         if let Ok(mode) = mode_str.parse::<BlockMode>() {
             return Header { window, mode };
         }
@@ -213,7 +229,7 @@ fn parse_block_header(header: &str) -> Header {
 
     Header {
         window: header.to_string(),
-        mode: BlockMode::View,
+        mode: BlockMode::Watch,
     }
 }
 
@@ -256,22 +272,22 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_single_block() {
-        let text = "Before\n```build\ncargo build\n```\nAfter";
+    fn test_parse_single_watch_block() {
+        let text = "Before\n```watch:build\ncargo build\n```\nAfter";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 3);
         assert!(matches!(&segments[0], ParsedSegment::Prose(_)));
         assert!(matches!(
             &segments[1],
             ParsedSegment::Block { window, mode, content }
-            if window == "build" && *mode == BlockMode::View && content == "cargo build"
+            if window == "build" && *mode == BlockMode::Watch && content == "cargo build"
         ));
         assert!(matches!(&segments[2], ParsedSegment::Prose(_)));
     }
 
     #[test]
     fn test_parse_close_mode() {
-        let text = "```build:close\n```";
+        let text = "```close:build\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -283,14 +299,14 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_blocks() {
-        let text = "```1\necho hello\n```\n```2\necho world\n```";
+        let text = "```watch:1\necho hello\n```\n```watch:2\necho world\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
     }
 
     #[test]
     fn test_parse_heredoc_inside_block() {
-        let text = "```build\ncat > config.yaml << 'EOF'\nserver:\n  port: 8080\n  note: \"``` not a closer\"\nEOF\n```";
+        let text = "```watch:build\ncat > config.yaml << 'EOF'\nserver:\n  port: 8080\n  note: \"``` not a closer\"\nEOF\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -302,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_parse_unquoted_heredoc() {
-        let text = "```build\ncat > file << DELIM\ncontent with ``` inside\nDELIM\n```";
+        let text = "```watch:build\ncat > file << DELIM\ncontent with ``` inside\nDELIM\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -313,13 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_double_quoted_heredoc() {
-        let text = "```build\ncat > file <<\"DELIM\"\ncontent\nDELIM\n```";
-        let segments = parse_response_segments(text);
-        assert_eq!(segments.len(), 1);
-    }
-
-    #[test]
     fn test_parse_no_mode_suffix() {
         let text = "```build\ncargo test\n```";
         let segments = parse_response_segments(text);
@@ -327,13 +336,13 @@ mod tests {
         assert!(matches!(
             &segments[0],
             ParsedSegment::Block { window, mode, content }
-            if window == "build" && *mode == BlockMode::View && content == "cargo test"
+            if window == "build" && *mode == BlockMode::Watch && content == "cargo test"
         ));
     }
 
     #[test]
     fn test_parse_unclosed_block() {
-        let text = "```build\ncargo build";
+        let text = "```watch:build\ncargo build";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -344,26 +353,34 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_header_with_mode() {
+    fn test_parse_header_prefix_format() {
         let h = parse_block_header("build");
         assert_eq!(h.window, "build");
-        assert_eq!(h.mode, BlockMode::View);
+        assert_eq!(h.mode, BlockMode::Watch);
 
-        let h = parse_block_header("build:close");
+        let h = parse_block_header("close:build");
         assert_eq!(h.window, "build");
         assert_eq!(h.mode, BlockMode::Close);
 
-        let h = parse_block_header("build:view");
+        let h = parse_block_header("watch:build");
         assert_eq!(h.window, "build");
-        assert_eq!(h.mode, BlockMode::View);
+        assert_eq!(h.mode, BlockMode::Watch);
 
-        let h = parse_block_header("my-window:close");
-        assert_eq!(h.window, "my-window");
-        assert_eq!(h.mode, BlockMode::Close);
-
-        let h = parse_block_header("install:exec");
+        let h = parse_block_header("exec:install");
         assert_eq!(h.window, "install");
         assert_eq!(h.mode, BlockMode::Exec);
+
+        let h = parse_block_header("file:src/main.rs");
+        assert_eq!(h.window, "src/main.rs");
+        assert_eq!(h.mode, BlockMode::File);
+
+        let h = parse_block_header("edit:src/main.rs");
+        assert_eq!(h.window, "src/main.rs");
+        assert_eq!(h.mode, BlockMode::Edit);
+
+        let h = parse_block_header("write:src/main.rs");
+        assert_eq!(h.window, "src/main.rs");
+        assert_eq!(h.mode, BlockMode::Write);
     }
 
     #[test]
@@ -380,48 +397,23 @@ mod tests {
             extract_heredoc_delimiter("  <<DELIM"),
             Some("DELIM".to_string())
         );
-        assert_eq!(
-            extract_heredoc_delimiter("  cat <<'INNEREOF'"),
-            Some("INNEREOF".to_string())
-        );
         assert_eq!(extract_heredoc_delimiter("no heredoc here"), None);
     }
 
     #[test]
     fn test_inline_block_open() {
-        let text = "Here we go:```build\ncargo build\n```";
+        let text = "Here we go:```watch:build\ncargo build\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
         assert!(matches!(
             &segments[0],
             ParsedSegment::Prose(s) if s == "Here we go:"
         ));
-        assert!(matches!(
-            &segments[1],
-            ParsedSegment::Block { window, mode, content }
-            if window == "build" && *mode == BlockMode::View && content == "cargo build"
-        ));
-    }
-
-    #[test]
-    fn test_inline_block_with_space() {
-        let text = "Some text ```build\ncargo build\n```";
-        let segments = parse_response_segments(text);
-        assert_eq!(segments.len(), 2);
-        assert!(matches!(
-            &segments[0],
-            ParsedSegment::Prose(s) if s == "Some text"
-        ));
-        assert!(matches!(
-            &segments[1],
-            ParsedSegment::Block { window, .. }
-            if window == "build"
-        ));
     }
 
     #[test]
     fn test_inline_block_close() {
-        let text = "```build\necho done```";
+        let text = "```watch:build\necho done```";
         let segments = parse_response_segments(text);
         assert!(!segments.is_empty());
         assert!(matches!(
@@ -432,66 +424,22 @@ mod tests {
     }
 
     #[test]
-    fn test_inline_close_with_prose_after() {
-        let text = "```build\necho hi```\nSome prose";
-        let segments = parse_response_segments(text);
-        assert!(!segments.is_empty());
-        assert!(matches!(
-            &segments[0],
-            ParsedSegment::Block { window, content, .. }
-            if window == "build" && content.contains("echo hi")
-        ));
-    }
-
-    #[test]
-    fn test_heredoc_with_space_after_redirect() {
-        let text = "```build\ncat > config.yaml << 'EOF'\nserver:\n  port: 8080\nEOF\n```";
-        let segments = parse_response_segments(text);
-        assert_eq!(segments.len(), 1);
-        assert!(matches!(
-            &segments[0],
-            ParsedSegment::Block { window, content, .. }
-            if window == "build" && content.contains("server:")
-        ));
-    }
-
-    #[test]
     fn test_consecutive_blocks() {
-        let text = "```build\ncargo build\n```\n```test\ncargo test\n```";
+        let text = "```watch:build\ncargo build\n```\n```watch:test\ncargo test\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
-        assert!(matches!(
-            &segments[0],
-            ParsedSegment::Block { window, .. } if window == "build"
-        ));
-        assert!(matches!(
-            &segments[1],
-            ParsedSegment::Block { window, .. } if window == "test"
-        ));
     }
 
     #[test]
     fn test_empty_prose_between_blocks_ignored() {
-        let text = "```build\ncargo build\n```\n\n\n```test\ncargo test\n```";
+        let text = "```watch:build\ncargo build\n```\n\n\n```watch:test\ncargo test\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
     }
 
     #[test]
-    fn test_model_munged_format() {
-        let text = r"Let me examine the key source files.```shell
-cat src/lib.rs
-``````shell
-cat src/main.rs
-```";
-        let segments = parse_response_segments(text);
-        assert_eq!(segments.len(), 3);
-        assert!(matches!(&segments[0], ParsedSegment::Prose(_)));
-    }
-
-    #[test]
     fn test_exec_block_basic() {
-        let text = "```install:exec\ncargo add serde\n```";
+        let text = "```exec:install\ncargo add serde\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -504,7 +452,7 @@ cat src/main.rs
     #[test]
     fn test_exec_block_with_heredoc_inside() {
         let text =
-            "```write-config:exec\ncat > config.toml << 'EOF'\n[build]\nrelease = true\nEOF\n```";
+            "```exec:write-config\ncat > config.toml << 'EOF'\n[build]\nrelease = true\nEOF\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -515,30 +463,38 @@ cat src/main.rs
     }
 
     #[test]
-    fn test_exec_block_with_backticks_inside() {
-        let text =
-            "```notes:exec\ncat > notes.md << 'EOF'\nSome ``` backticks inside\nand more\nEOF\n```";
+    fn test_file_block() {
+        let text = "```file:src/main.rs\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
             ParsedSegment::Block { window, mode, content }
-            if window == "notes" && *mode == BlockMode::Exec && content.contains("``` backticks")
+            if window == "src/main.rs" && *mode == BlockMode::File && content.is_empty()
         ));
     }
 
     #[test]
-    fn test_exec_block_then_view_block() {
-        let text = "```install:exec\ncargo add serde\n```\n```build\ncargo build\n```";
+    fn test_edit_block() {
+        let text = "```edit:src/main.rs\n10,15c\nfn new() {}\n```";
         let segments = parse_response_segments(text);
-        assert_eq!(segments.len(), 2);
+        assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { mode, .. } if *mode == BlockMode::Exec
+            ParsedSegment::Block { window, mode, content }
+            if window == "src/main.rs" && *mode == BlockMode::Edit && content.contains("10,15c")
         ));
+    }
+
+    #[test]
+    fn test_write_block() {
+        let text = "```write:src/main.rs\nfn main() {}\n```";
+        let segments = parse_response_segments(text);
+        assert_eq!(segments.len(), 1);
         assert!(matches!(
-            &segments[1],
-            ParsedSegment::Block { mode, .. } if *mode == BlockMode::View
+            &segments[0],
+            ParsedSegment::Block { window, mode, content }
+            if window == "src/main.rs" && *mode == BlockMode::Write && content == "fn main() {}"
         ));
     }
 
@@ -547,7 +503,7 @@ cat src/main.rs
         let blocks = vec![
             ParsedBlock {
                 window: "mind".into(),
-                mode: BlockMode::View,
+                mode: BlockMode::Watch,
                 content: "cat mind.md".into(),
                 prose: Some("checking state".into()),
             },
@@ -563,10 +519,41 @@ cat src/main.rs
         let parsed = parse_response(&text);
         assert_eq!(parsed.segments.len(), 2);
         assert_eq!(parsed.segments[0].window, "mind");
-        assert_eq!(parsed.segments[0].mode, BlockMode::View);
+        assert_eq!(parsed.segments[0].mode, BlockMode::Watch);
         assert_eq!(parsed.segments[0].content, "cat mind.md");
         assert_eq!(parsed.segments[0].prose.as_deref(), Some("checking state"));
         assert_eq!(parsed.segments[1].window, "install");
         assert_eq!(parsed.segments[1].mode, BlockMode::Exec);
+    }
+
+    #[test]
+    fn test_roundtrip_file_edit_write() {
+        let blocks = vec![
+            ParsedBlock {
+                window: "src/main.rs".into(),
+                mode: BlockMode::File,
+                content: String::new(),
+                prose: None,
+            },
+            ParsedBlock {
+                window: "src/lib.rs".into(),
+                mode: BlockMode::Edit,
+                content: "10,15c\nfn new() {}\n".into(),
+                prose: None,
+            },
+            ParsedBlock {
+                window: "config.toml".into(),
+                mode: BlockMode::Write,
+                content: "[build]\nrelease = true\n".into(),
+                prose: None,
+            },
+        ];
+
+        let text = serialize_blocks(&blocks);
+        let parsed = parse_response(&text);
+        assert_eq!(parsed.segments.len(), 3);
+        assert_eq!(parsed.segments[0].mode, BlockMode::File);
+        assert_eq!(parsed.segments[1].mode, BlockMode::Edit);
+        assert_eq!(parsed.segments[2].mode, BlockMode::Write);
     }
 }

@@ -1,5 +1,6 @@
-use crate::agent::{Agent};
+use crate::agent::Agent;
 use crate::backend::Backend;
+use crate::response::edit_command;
 use crate::session::SessionDir;
 use crate::state::State;
 use crate::types::{BlockMode, ParsedBlock};
@@ -14,6 +15,9 @@ pub enum CoreError {
 
     #[error("agent error: {0}")]
     Agent(#[from] crate::agent::AgentError),
+
+    #[error("edit error: {0}")]
+    Edit(#[from] edit_command::EditError),
 
     #[error("Ctrl-C received")]
     Interrupted,
@@ -104,7 +108,6 @@ impl Server {
 
             self.session.write_response(&state.response);
 
-            // todo move to tick somehow
             self.session.append_to_mind(&state.response.reasoning);
 
             self.session.write_index(&state.segments);
@@ -127,12 +130,10 @@ impl Server {
 
         self.update_state(&mut state).await;
 
-        if state.segments.is_empty() {
-            info!("tick #{tick_n}: state updated, no segments left, exiting");
-            return Ok(state);
-        }
-
-        info!("tick #{tick_n}: state updated, calling agent");
+        info!(
+            "tick #{tick_n}: state updated ({} segments), calling agent",
+            state.segments.len()
+        );
 
         self.debug_wait("before agent call").await;
 
@@ -141,6 +142,28 @@ impl Server {
             "tick #{tick_n}: agent responded ({} segments)",
             response.segments.len()
         );
+
+        let mut pending_segments: Vec<ParsedBlock> = Vec::new();
+        for block in &response.segments {
+            match block.mode {
+                BlockMode::Close => {
+                    state.segments.retain(|s| s.window != block.window);
+                }
+                _ => {
+                    if let Some(pos) =
+                        state.segments.iter().position(|s| s.window == block.window)
+                    {
+                        if let Some(seg) = state.segments.get_mut(pos) {
+                            *seg = block.clone();
+                        }
+                    } else {
+                        pending_segments.push(block.clone());
+                    }
+                }
+            }
+        }
+        state.segments.extend(pending_segments);
+
         state.response = response;
         state.tick_n += 1;
 
@@ -148,6 +171,7 @@ impl Server {
         Ok(state)
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn update_state(&self, state: &mut State) {
         let State {
             response,
@@ -155,24 +179,33 @@ impl Server {
             segments,
             ..
         } = state;
+        let mut close_blocks: Vec<&ParsedBlock> = Vec::new();
         let mut ask_blocks: Vec<&ParsedBlock> = Vec::new();
         let mut exec_blocks: Vec<&ParsedBlock> = Vec::new();
-        let mut view_blocks: Vec<&ParsedBlock> = Vec::new();
+        let mut watch_blocks: Vec<&ParsedBlock> = Vec::new();
+        let mut file_blocks: Vec<&ParsedBlock> = Vec::new();
+        let mut write_blocks: Vec<&ParsedBlock> = Vec::new();
+        let mut edit_blocks: Vec<&ParsedBlock> = Vec::new();
 
         for block in &response.segments {
             match block.mode {
+                BlockMode::Close => close_blocks.push(block),
                 BlockMode::Ask => ask_blocks.push(block),
-                BlockMode::Close => {
-                    self.session.remove_out(&block.window);
-                    outputs.remove(&block.window);
-                    segments.retain(|s| s.window != block.window);
-                }
                 BlockMode::Exec => exec_blocks.push(block),
-                BlockMode::View => view_blocks.push(block),
+                BlockMode::Watch => watch_blocks.push(block),
+                BlockMode::File => file_blocks.push(block),
+                BlockMode::Write => write_blocks.push(block),
+                BlockMode::Edit => edit_blocks.push(block),
             }
         }
 
-        for block in ask_blocks {
+        for block in &close_blocks {
+            self.session.remove_out(&block.window);
+            outputs.remove(&block.window);
+            segments.retain(|s| s.window != block.window);
+        }
+
+        for block in &ask_blocks {
             if let Some(output) = self.session.read_out(&block.window) {
                 debug!("execute: '{}' ask cached", block.window);
                 outputs.insert(block.window.clone(), output);
@@ -185,11 +218,11 @@ impl Server {
                 };
                 self.session.write_out(&block.window, &output);
                 outputs.insert(block.window.clone(), output);
-                segments.push(block.clone());
+                upsert_segment(segments, (*block).clone());
             }
         }
 
-        for block in exec_blocks {
+        for block in &exec_blocks {
             if let Some(output) = self.session.read_out(&block.window) {
                 debug!("execute: '{}' cached", block.window);
                 outputs.insert(block.window.clone(), output);
@@ -198,18 +231,103 @@ impl Server {
                 let output = self.back.run(&block.window, &block.content).await;
                 self.session.write_out(&block.window, &output);
                 outputs.insert(block.window.clone(), output);
-                segments.push(block.clone());
+                upsert_segment(segments, (*block).clone());
             }
         }
 
-        for block in view_blocks {
-            segments.push(block.clone());
+        for block in &write_blocks {
+            self.session.remove_out(&block.window);
+            outputs.remove(&block.window);
+            debug!("execute: '{}' write", block.window);
+            let cmd = format!(
+                "cat > {} << 'TAIWRITE'\n{}\nTAIWRITE",
+                block.window, block.content
+            );
+            let output = self.back.run(&block.window, &cmd).await;
+            self.session.write_out(&block.window, &output);
+
+            let file_view = self.back.run(&block.window, &format!("cat -n {}", block.window)).await;
+            outputs.insert(block.window.clone(), file_view);
+
+            move_to_end(segments, &block.window);
+            upsert_segment(segments, (*block).clone());
+        }
+
+        let mut edit_groups: std::collections::HashMap<String, Vec<&ParsedBlock>> =
+            std::collections::HashMap::new();
+        for block in &edit_blocks {
+            edit_groups
+                .entry(block.window.clone())
+                .or_default()
+                .push(block);
+        }
+
+        for (path, blocks) in &edit_groups {
+            self.session.remove_out(path);
+            outputs.remove(path);
+
+            let mut all_commands = Vec::new();
+            for block in blocks {
+                match edit_command::parse_edit_commands(&block.content) {
+                    Ok(cmds) => all_commands.extend(cmds),
+                    Err(e) => {
+                        warn!("edit parse error for {path}: {e}");
+                        let output = crate::backend::CmdOutput {
+                            exit_code: 1,
+                            stdout: format!("edit error: {e}"),
+                        };
+                        self.session.write_out(path, &output);
+                        outputs.insert(path.clone(), output);
+                    }
+                }
+            }
+
+            if all_commands.is_empty() {
+                continue;
+            }
+
+            edit_command::sort_bottom_up(&mut all_commands);
+            let script = edit_command::build_ex_script(path, &all_commands);
+            debug!("execute: '{}' edit script: {}", path, script);
+
+            let output = self.back.run(path, &script).await;
+            self.session.write_out(path, &output);
+
+            let file_view = self
+                .back
+                .run(path, &format!("cat -n {path}"))
+                .await;
+            outputs.insert(path.clone(), file_view);
+
+            move_to_end(segments, path);
+            if let Some(first) = blocks.first() {
+                upsert_segment(segments, (*first).clone());
+            }
+        }
+
+        for block in &file_blocks {
+            let watch_block = ParsedBlock {
+                window: block.window.clone(),
+                mode: BlockMode::Watch,
+                content: format!("cat -n {}", block.window),
+                prose: block.prose.clone(),
+            };
+            upsert_segment(segments, watch_block);
+        }
+
+        for block in watch_blocks {
+            upsert_segment(segments, (*block).clone());
         }
 
         for block in segments {
-            if block.mode == BlockMode::View {
-                debug!("execute: '{}' view", block.window);
-                let output = self.back.run(&block.window, &block.content).await;
+            if block.mode == BlockMode::Watch || block.mode == BlockMode::File {
+                debug!("execute: '{}' watch", block.window);
+                let cmd = if block.mode == BlockMode::File {
+                    format!("cat -n {}", block.window)
+                } else {
+                    block.content.clone()
+                };
+                let output = self.back.run(&block.window, &cmd).await;
                 self.session.write_out(&block.window, &output);
                 outputs.insert(block.window.clone(), output);
             }
@@ -222,6 +340,23 @@ impl Server {
         }
         println!("debug ({point}): press Enter to continue...");
         read_line().await;
+    }
+}
+
+fn upsert_segment(segments: &mut Vec<ParsedBlock>, block: ParsedBlock) {
+    if let Some(pos) = segments.iter().position(|s| s.window == block.window) {
+        if let Some(seg) = segments.get_mut(pos) {
+            *seg = block;
+        }
+    } else {
+        segments.push(block);
+    }
+}
+
+fn move_to_end(segments: &mut Vec<ParsedBlock>, window: &str) {
+    if let Some(idx) = segments.iter().position(|s| s.window == window) {
+        let seg = segments.remove(idx);
+        segments.push(seg);
     }
 }
 

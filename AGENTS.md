@@ -112,8 +112,9 @@ Clippy: pedantic, panic/indexing/unwrap — deny. Конфиг в `clippy.toml` 
 ## Команды для проверки
 
 ```bash
-cargo test        # все тесты (юнит + интеграционные)
-cargo clippy      # линтер (настроен pedantic)
+cargo test                                   # все тесты (юнит + интеграционные)
+cargo clippy --fix --allow-dirty --all-targets  # автофикс линтера (pedantic)
+cargo clippy                                 # проверить без фикса
 ```
 
 ## Философия

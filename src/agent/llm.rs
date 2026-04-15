@@ -150,22 +150,40 @@ fn render_block_assistant(
     }
     match mode {
         BlockMode::Close => {
-            let _ = std::fmt::Write::write_fmt(&mut text, format_args!("```{window}:close\n```"));
+            let _ = std::fmt::Write::write_fmt(&mut text, format_args!("```close:{window}\n```"));
+        }
+        BlockMode::Watch => {
+            let _ = std::fmt::Write::write_fmt(
+                &mut text,
+                format_args!("```watch:{window}\n{content}\n```"),
+            );
         }
         BlockMode::Exec => {
             let _ = std::fmt::Write::write_fmt(
                 &mut text,
-                format_args!("```{window}:exec\n{content}\n```"),
+                format_args!("```exec:{window}\n{content}\n```"),
             );
-        }
-        BlockMode::View => {
-            let _ =
-                std::fmt::Write::write_fmt(&mut text, format_args!("```{window}\n{content}\n```"));
         }
         BlockMode::Ask => {
             let _ = std::fmt::Write::write_fmt(
                 &mut text,
-                format_args!("```{window}:ask\n{content}\n```"),
+                format_args!("```ask:{window}\n{content}\n```"),
+            );
+        }
+        BlockMode::File => {
+            let _ =
+                std::fmt::Write::write_fmt(&mut text, format_args!("```file:{window}\n```"));
+        }
+        BlockMode::Edit => {
+            let _ = std::fmt::Write::write_fmt(
+                &mut text,
+                format_args!("```edit:{window}\n{content}\n```"),
+            );
+        }
+        BlockMode::Write => {
+            let _ = std::fmt::Write::write_fmt(
+                &mut text,
+                format_args!("```write:{window}\n{content}\n```"),
             );
         }
     }
@@ -175,7 +193,7 @@ fn render_block_assistant(
 fn render_output_user(output: &CmdOutput) -> ChatCompletionRequestMessage {
     let mut body = String::new();
     body.push_str(&output.stdout);
-    if !output.stdout.ends_with('\n') && !output.stdout.is_empty() {
+    if !body.ends_with('\n') && !body.is_empty() {
         body.push('\n');
     }
     let _ = std::fmt::Write::write_fmt(&mut body, format_args!("exit {}", output.exit_code));
@@ -196,12 +214,15 @@ fn render_dashboard(state: &State) -> ChatCompletionRequestMessage {
             let tokens = estimate_tokens(&output.stdout);
             total_tokens += tokens;
             let mode = match segment.mode {
-                BlockMode::View => "view",
+                BlockMode::Watch => "watch",
                 BlockMode::Exec => "exec",
                 BlockMode::Close => "close",
                 BlockMode::Ask => "ask",
+                BlockMode::File => "file",
+                BlockMode::Edit => "edit",
+                BlockMode::Write => "write",
             };
-            let cached = segment.mode == BlockMode::Exec || segment.mode == BlockMode::Ask;
+            let cached = matches!(segment.mode, BlockMode::Exec | BlockMode::Ask | BlockMode::Edit | BlockMode::Write);
             let status = if cached { "cached" } else { "rerun" };
             let _ = std::fmt::Write::write_fmt(
                 &mut body,
