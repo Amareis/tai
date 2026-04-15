@@ -36,8 +36,8 @@ async fn tick_empty_session() {
     );
 
     let mut server = test_server(session, agent);
-    let mut segments = vec![];
-    server.tick(&mut segments).await.unwrap();
+    let state = State::default();
+    server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -65,9 +65,9 @@ async fn tick_agent_runs_command() {
         );
 
     let mut server = test_server(session, agent);
-    let mut segments = vec![];
-    server.tick(&mut segments).await.unwrap();
-    server.tick(&mut segments).await.unwrap();
+    let state = State::default();
+    let state = server.tick(state).await.unwrap();
+    server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -91,12 +91,12 @@ async fn close_removes_from_tracked() {
         );
 
     let mut server = test_server(session, agent);
-    let mut segments = vec![];
-    server.tick(&mut segments).await.unwrap();
-    assert_eq!(segments.len(), 1);
-    server.tick(&mut segments).await.unwrap();
-    assert_eq!(segments.len(), 0);
-    server.tick(&mut segments).await.unwrap();
+    let state = State::default();
+    let state = server.tick(state).await.unwrap();
+    assert_eq!(state.segments.len(), 1);
+    let state = server.tick(state).await.unwrap();
+    assert_eq!(state.segments.len(), 0);
+    server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -120,9 +120,9 @@ async fn exec_runs_once_then_caches() {
         );
 
     let mut server = test_server(session, agent);
-    let mut segments = vec![];
-    server.tick(&mut segments).await.unwrap();
-    server.tick(&mut segments).await.unwrap();
+    let state = State::default();
+    let state = server.tick(state).await.unwrap();
+    server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -151,13 +151,13 @@ async fn upsert_replaces_existing_title() {
         );
 
     let mut server = test_server(session, agent);
-    let mut segments = vec![];
-    server.tick(&mut segments).await.unwrap();
-    assert_eq!(segments.len(), 1);
-    server.tick(&mut segments).await.unwrap();
-    assert_eq!(segments.len(), 1);
-    server.tick(&mut segments).await.unwrap();
-    assert_eq!(segments.len(), 0);
+    let state = State::default();
+    let state = server.tick(state).await.unwrap();
+    assert_eq!(state.segments.len(), 1);
+    let state = server.tick(state).await.unwrap();
+    assert_eq!(state.segments.len(), 1);
+    let state = server.tick(state).await.unwrap();
+    assert_eq!(state.segments.len(), 0);
 
     assert_test_agent(&server);
 }

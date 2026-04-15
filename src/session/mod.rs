@@ -117,9 +117,7 @@ impl SessionDir {
     pub fn read_index(&self) -> Vec<ParsedBlock> {
         let path = self.internal.join("index.md");
         match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                parse_response(&text).segments
-            }
+            Ok(text) => parse_response(&text).segments,
             Err(_) => Vec::new(),
         }
     }
@@ -213,7 +211,7 @@ impl SessionDir {
     }
 
     pub fn write_response(&self, response: &AgentResponse) {
-        let path = self.internal.join("response.md");
+        let path = self.internal.join("response.toml");
         std::fs::write(
             &path,
             toml::to_string(response).unwrap_or_else(|e| e.to_string()),
@@ -222,7 +220,7 @@ impl SessionDir {
     }
     #[must_use]
     pub fn read_response(&self) -> Option<AgentResponse> {
-        let path = self.internal.join("response.md");
+        let path = self.internal.join("response.toml");
         toml::from_str(&std::fs::read_to_string(path).ok()?).ok()
     }
 
@@ -239,6 +237,18 @@ impl SessionDir {
         content.push_str(text);
         content.push('\n');
         std::fs::write(&path, content).ok();
+    }
+
+    pub fn print_banner(&self) {
+        let to_resume = format!("  tai server {}  ", self.session_path().display());
+        let width = std::cmp::max(50, to_resume.chars().count());
+        let border = "═".repeat(width);
+        println!();
+        println!("╔{:═^width$}╗", " TO RESUME SESSION ");
+        println!("║{:^width$}║", " ");
+        println!("║{to_resume:^width$}║");
+        println!("║{:^width$}║", " ");
+        println!("╚{border}╝");
     }
 }
 

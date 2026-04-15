@@ -3,7 +3,6 @@ use crate::backend::Backend;
 use crate::session::SessionDir;
 use crate::state::State;
 use crate::types::{BlockMode, ParsedBlock};
-use std::collections::{HashMap};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, info, warn};
@@ -97,6 +96,7 @@ impl Server {
                     if !matches!(e, CoreError::Interrupted) {
                         warn!("tick error: {}", e);
                     }
+                    self.session.print_banner();
                     break;
                 }
                 Ok(s) => state = s,
@@ -116,20 +116,7 @@ impl Server {
             }
         }
 
-        self.print_banner();
         Ok(())
-    }
-
-    fn print_banner(&self) {
-        let to_resume = format!("  tai server {}  ", self.session.session_path().display());
-        let width = std::cmp::max(50, to_resume.chars().count());
-        let border = "═".repeat(width);
-        println!();
-        println!("╔{:═^width$}╗", " TO RESUME SESSION ");
-        println!("║{:^width$}║", " ");
-        println!("║{to_resume:^width$}║");
-        println!("║{:^width$}║", " ");
-        println!("╚{border}╝");
     }
 
     pub async fn tick(&mut self, mut state: State) -> Result<State, CoreError> {
