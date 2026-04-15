@@ -63,11 +63,12 @@ impl Server {
 
         let mut state = {
             let segments = self.session.read_index();
+            let outputs = self.session.read_all_outputs(&segments);
             let system = self.session.read_system_prompt().await;
             let tick = self.session.read_tick(1).await;
             let response = self.session.read_response().unwrap_or_default();
 
-            State::build(system, segments, HashMap::new(), tick, response)
+            State::build(system, segments, outputs, tick, response)
         };
 
         info!(
