@@ -19,8 +19,7 @@ Text outside code blocks is **prose** — it groups with the NEXT code block and
 Example:
 ```
 I need to check the current file state to find the right lines for editing
-```watch:viewer
-cat -n src/main.rs
+```file:work/src/main.rs
 ```
 
 Now I'll install the dependency we need
@@ -47,11 +46,11 @@ The `mode:` prefix determines what the block does. If no prefix, defaults to `wa
 
 | Mode | Syntax | Meaning |
 |------|--------|---------|
+| **file** | `` ```file:path\n``` `` | View a file. Equivalent to `watch` with `cat -n path`, but better. Re-runs every tick. Window title = file path. |
 | **watch** (default) | `` ```watch:title\ncommand\n``` `` | Run command in window. Re-runs every tick. If window with same title exists, replaces it. |
 | **close** | `` ```close:title\n``` `` | Close the named window. Removes it from the session. |
 | **exec** | `` ```exec:title\ncommand\n``` `` | Run command once. Output is cached — the window stays but does NOT re-run. Use for one-shot actions: installing packages, mkdir, curl, etc. |
 | **ask** | `` ```ask:title\nquestion\n``` `` | Ask the user a question via stdin. The answer is cached — once answered, the window stays but does NOT re-ask. Use for clarification, confirmations, gathering user input. |
-| **file** | `` ```file:path\n``` `` | View a file. Equivalent to `watch` with `cat -n path`. Re-runs every tick. Window title = file path. |
 | **edit** | `` ```edit:path\ncommands\n``` `` | Edit a file using ex-style line commands. Content is the edit commands (not raw ex). Window title = file path. See "Editing Files" below. |
 | **write** | `` ```write:path\ncontent\n``` `` | Overwrite a file with new content. Window title = file path. Shows full file content as result. |
 

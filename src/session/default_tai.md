@@ -6,14 +6,12 @@ tree -l --gitignore
 
 Working memory — persistent across ticks, updated via :exec.
 
-```watch:mind
-cat mind.md
+```file:mind.md
 ```
 
 Project conventions and architecture reference.
 
-```watch:agents
-cat work/AGENTS.md
+```file:agents.md
 ```
 
 ```ask:task
