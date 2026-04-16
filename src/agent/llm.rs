@@ -1,8 +1,7 @@
 use super::{Agent, AgentError, AgentResponse};
-use crate::backend::CmdOutput;
 use crate::response::parse_response;
 use crate::state::State;
-use crate::types::BlockMode;
+use crate::types::ParsedBlock;
 use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
@@ -13,6 +12,7 @@ use async_trait::async_trait;
 use futures_util::Stream;
 use futures_util::stream::StreamExt;
 use serde_json::Value;
+use std::fmt::Write;
 use std::pin::Pin;
 use tracing::{debug, error, info, warn};
 
@@ -39,10 +39,77 @@ type MyStreamingType = Pin<Box<dyn Stream<Item = Result<Value, OpenAIError>> + S
 impl Agent for LlmAgent {
     #[allow(clippy::indexing_slicing)]
     async fn step(&self, state: &State) -> Result<AgentResponse, AgentError> {
-        info!("llm step: building request for model '{}'", self.model);
+        let messages = state_to_messages(state);
+        let (text, reasoning) = self.call_llm(&messages).await?;
+
+        let mut resp = parse_response(&text).with_reasoning(&reasoning);
+
+        info!(
+            "llm step: parsed {} segments, next_steps {} bytes",
+            resp.segments.len(),
+            resp.next_steps.len()
+        );
+
+        let needs_next_steps = resp.next_steps.is_empty();
+        let has_heredoc_violations = !resp.heredoc_violations.is_empty();
+
+        if needs_next_steps || has_heredoc_violations {
+            let mut re_messages = messages;
+            re_messages.push(ChatCompletionRequestAssistantMessage::from(text.as_str()).into());
+            let mut complaint = String::new();
+            if needs_next_steps {
+                complaint.push_str(
+                    "You forgot to include a `next-steps` block. \
+                     You MUST reply with a ```next-steps block containing your plan for the next tick. ",
+                );
+            }
+            if has_heredoc_violations {
+                complaint.push_str(
+                    "Write and edit blocks MUST use heredoc syntax: \
+                     the content must start with <<'TAI' and end with TAI on its own line. \
+                     Violations: ",
+                );
+                complaint.push_str(&resp.heredoc_violations.join(", "));
+                complaint.push_str(". ");
+            }
+            complaint.push_str("You may also include action blocks if needed.");
+            re_messages.push(ChatCompletionRequestUserMessage::from(complaint.as_str()).into());
+            let (re_text, re_reasoning) = self.call_llm(&re_messages).await?;
+            let re_resp = parse_response(&re_text).with_reasoning(&re_reasoning);
+            if !re_resp.next_steps.is_empty() {
+                resp.next_steps = re_resp.next_steps;
+            }
+            let fixed_segments: Vec<ParsedBlock> = re_resp
+                .segments
+                .into_iter()
+                .filter(|s| !s.mode.requires_heredoc() || !s.content.contains("```") || re_resp.heredoc_violations.is_empty())
+                .collect();
+            resp.segments.extend(fixed_segments);
+            info!(
+                "llm step: re-prompt done, next_steps {} bytes",
+                resp.next_steps.len()
+            );
+        }
+
+        if self.debug {
+            let s = toml::to_string_pretty(&resp).unwrap_or_else(|e| e.to_string());
+            debug!("Response: {s}");
+        }
+
+        Ok(resp)
+    }
+}
+
+impl LlmAgent {
+    #[allow(clippy::indexing_slicing)]
+    async fn call_llm(
+        &self,
+        messages: &[ChatCompletionRequestMessage],
+    ) -> Result<(String, String), AgentError> {
+        info!("llm: building request for model '{}'", self.model);
         let request = CreateChatCompletionRequestArgs::default()
             .model(&self.model)
-            .messages(state_to_messages(state))
+            .messages(messages.to_vec())
             .stream(true)
             .build()?;
 
@@ -51,12 +118,12 @@ impl Agent for LlmAgent {
             info!("Send request: {s}");
         }
 
-        info!("llm step: creating stream...");
+        info!("llm: creating stream...");
         let mut stream: MyStreamingType = match self.client.chat().create_stream_byot(request).await
         {
             Ok(s) => s,
             Err(e) => {
-                error!("llm step: failed to create stream: {e}");
+                error!("llm: failed to create stream: {e}");
                 return Err(AgentError::Llm(e));
             }
         };
@@ -65,7 +132,6 @@ impl Agent for LlmAgent {
         let mut reasoning = String::new();
         let mut thinks = false;
 
-        info!("llm step: reading stream...");
         while let Some(result) = stream.next().await {
             match result {
                 Ok(res) => {
@@ -89,28 +155,19 @@ impl Agent for LlmAgent {
                     }
                 }
                 Err(e) => {
-                    warn!("llm step: stream error: {e:#?}");
+                    warn!("llm: stream error: {e:#?}");
                 }
             }
         }
         println!("\nDONE");
 
         info!(
-            "llm step: stream complete, text {} bytes, reasoning {} bytes",
+            "llm: stream complete, text {} bytes, reasoning {} bytes",
             text.len(),
             reasoning.len()
         );
 
-        let resp = parse_response(&text).with_reasoning(&reasoning);
-
-        info!("llm step: parsed {} segments", resp.segments.len());
-
-        if self.debug {
-            let s = toml::to_string_pretty(&resp).unwrap_or_else(|e| e.to_string());
-            debug!("Response: {s}");
-        }
-
-        Ok(resp)
+        Ok((text, reasoning))
     }
 }
 
@@ -119,123 +176,65 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
     let mut ms: Vec<ChatCompletionRequestMessage> =
         vec![ChatCompletionRequestSystemMessage::from(state.system.clone()).into()];
 
-    for segment in &state.segments {
-        ms.push(render_block_assistant(
-            &segment.window,
-            segment.mode,
-            &segment.content,
-            segment.prose.as_deref(),
-        ));
+    let mut body = String::new();
 
-        if let Some(output) = state.outputs.get(&segment.window) {
-            ms.push(render_output_user(output));
-        }
+    if !state.next_steps.is_empty() {
+        body.push_str("## Next Steps\n");
+        body.push_str(&state.next_steps);
+        body.push_str("\n\n");
     }
 
-    ms.push(render_dashboard(state));
+    let (regular, dashboard): (Vec<_>, Vec<_>) =
+        state.segments.iter().partition(|s| !s.dashboard);
 
+    write_blocks(&mut body, &regular, state);
+
+    if !dashboard.is_empty() {
+        write_blocks(&mut body, &dashboard, state);
+    }
+
+    body.push_str(&render_window_summary(state));
+
+    ms.push(ChatCompletionRequestUserMessage::from(body).into());
     ms
 }
 
-fn render_block_assistant(
-    window: &str,
-    mode: BlockMode,
-    content: &str,
-    prose: Option<&str>,
-) -> ChatCompletionRequestMessage {
-    let mut text = String::new();
-    if let Some(p) = prose {
-        text.push_str(p);
-        text.push('\n');
-    }
-    match mode {
-        BlockMode::Close => {
-            let _ = std::fmt::Write::write_fmt(&mut text, format_args!("```close:{window}\n```"));
-        }
-        BlockMode::Watch => {
-            let _ = std::fmt::Write::write_fmt(
-                &mut text,
-                format_args!("```watch:{window}\n{content}\n```"),
-            );
-        }
-        BlockMode::Exec => {
-            let _ = std::fmt::Write::write_fmt(
-                &mut text,
-                format_args!("```exec:{window}\n{content}\n```"),
-            );
-        }
-        BlockMode::Ask => {
-            let _ = std::fmt::Write::write_fmt(
-                &mut text,
-                format_args!("```ask:{window}\n{content}\n```"),
-            );
-        }
-        BlockMode::File => {
-            let _ =
-                std::fmt::Write::write_fmt(&mut text, format_args!("```file:{window}\n```"));
-        }
-        BlockMode::Edit => {
-            let _ = std::fmt::Write::write_fmt(
-                &mut text,
-                format_args!("```edit:{window}\n{content}\n```"),
-            );
-        }
-        BlockMode::Write => {
-            let _ = std::fmt::Write::write_fmt(
-                &mut text,
-                format_args!("```write:{window}\n{content}\n```"),
-            );
+fn write_blocks(to: &mut impl Write, segments: &[&ParsedBlock], state: &State) {
+    for segment in segments {
+        if let Some(output) = state.outputs.get(&segment.window) {
+            let _ = writeln!(to, "## [{}]", segment.window);
+            if !output.stdout.is_empty() {
+                let _ = write!(to, "{}", output.stdout);
+                if !output.stdout.ends_with('\n') {
+                    let _ = writeln!(to);
+                }
+            }
+            let _ = write!(to, "exit {}\n\n", output.exit_code);
         }
     }
-    ChatCompletionRequestAssistantMessage::from(text).into()
-}
-
-fn render_output_user(output: &CmdOutput) -> ChatCompletionRequestMessage {
-    let mut body = String::new();
-    body.push_str(&output.stdout);
-    if !body.ends_with('\n') && !body.is_empty() {
-        body.push('\n');
-    }
-    let _ = std::fmt::Write::write_fmt(&mut body, format_args!("exit {}", output.exit_code));
-    ChatCompletionRequestUserMessage::from(body).into()
 }
 
 fn estimate_tokens(text: &str) -> usize {
     text.len().div_ceil(4)
 }
 
-fn render_dashboard(state: &State) -> ChatCompletionRequestMessage {
+fn render_window_summary(state: &State) -> String {
     let mut body = String::from("== Windows ==\n");
     let mut total_tokens: usize = estimate_tokens(&state.system);
+    if !state.next_steps.is_empty() {
+        total_tokens += estimate_tokens(&state.next_steps);
+    }
 
     for segment in &state.segments {
         if let Some(output) = state.outputs.get(&segment.window) {
-            let lines = output.stdout.lines().count();
             let tokens = estimate_tokens(&output.stdout);
             total_tokens += tokens;
-            let mode = match segment.mode {
-                BlockMode::Watch => "watch",
-                BlockMode::Exec => "exec",
-                BlockMode::Close => "close",
-                BlockMode::Ask => "ask",
-                BlockMode::File => "file",
-                BlockMode::Edit => "edit",
-                BlockMode::Write => "write",
-            };
-            let cached = matches!(segment.mode, BlockMode::Exec | BlockMode::Ask | BlockMode::Edit | BlockMode::Write);
-            let status = if cached { "cached" } else { "rerun" };
+            let is_dashboard = segment.dashboard;
+            let tag = if is_dashboard { "dashboard" } else { "active" };
             let _ = std::fmt::Write::write_fmt(
                 &mut body,
-                format_args!(
-                    "{}: {} lines (~{} tok), {} ({})\n",
-                    segment.window, lines, tokens, mode, status
-                ),
+                format_args!("{}: ~{} tok ({})\n", segment.window, tokens, tag),
             );
-        } else {
-            total_tokens += estimate_tokens(&segment.content);
-            if let Some(prose) = &segment.prose {
-                total_tokens += estimate_tokens(prose);
-            }
         }
     }
 
@@ -246,5 +245,5 @@ fn render_dashboard(state: &State) -> ChatCompletionRequestMessage {
             state.tick_n
         ),
     );
-    ChatCompletionRequestUserMessage::from(body).into()
+    body
 }

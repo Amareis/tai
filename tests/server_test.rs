@@ -26,13 +26,17 @@ fn test_server(session: SessionDir, agent: TestAgent) -> Server {
     Server::with_backend(session, Box::new(LocalBackend::new(cwd)), Box::new(agent))
 }
 
+fn ns(steps: &str) -> AgentResponse {
+    AgentResponse::new().with_next_steps(steps)
+}
+
 #[tokio::test]
 #[traced_test]
 async fn tick_empty_session() {
     let session = test_session();
     let agent = TestAgent::new().add_step(
         |_state: &State| {},
-        AgentResponse::new(),
+        ns("done"),
     );
 
     let mut server = test_server(session, agent);
@@ -49,7 +53,8 @@ async fn tick_agent_runs_command() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("build", BlockMode::Watch, "echo marker-xyz"),
+            AgentResponse::block("build", BlockMode::Watch, "echo marker-xyz")
+                .with_next_steps("check build output"),
         )
         .add_step(
             |state: &State| {
@@ -57,7 +62,8 @@ async fn tick_agent_runs_command() {
                     .is_some_and(|o| o.stdout.contains("marker-xyz"));
                 assert!(found, "expected marker-xyz in outputs, got: {:?}", state.outputs);
             },
-            AgentResponse::block("build", BlockMode::Close, ""),
+            AgentResponse::block("build", BlockMode::Close, "")
+                .with_next_steps("closing build"),
         );
 
     let mut server = test_server(session, agent);
@@ -76,11 +82,13 @@ async fn close_removes_from_tracked() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("build", BlockMode::Watch, "echo hello"),
+            AgentResponse::block("build", BlockMode::Watch, "echo hello")
+                .with_next_steps("watching build"),
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("build", BlockMode::Close, ""),
+            AgentResponse::block("build", BlockMode::Close, "")
+                .with_next_steps("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -100,7 +108,8 @@ async fn exec_runs_once_then_caches() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("install", BlockMode::Exec, "echo installed-once"),
+            AgentResponse::block("install", BlockMode::Exec, "echo installed-once")
+                .with_next_steps("installing"),
         )
         .add_step(
             |state: &State| {
@@ -108,7 +117,8 @@ async fn exec_runs_once_then_caches() {
                     .is_some_and(|o| o.stdout.contains("installed-once"));
                 assert!(found, "expected 'installed-once' in install output, got: {:?}", state.outputs);
             },
-            AgentResponse::block("install", BlockMode::Close, ""),
+            AgentResponse::block("install", BlockMode::Close, "")
+                .with_next_steps("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -127,11 +137,13 @@ async fn upsert_replaces_existing_title() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("build", BlockMode::Watch, "echo first"),
+            AgentResponse::block("build", BlockMode::Watch, "echo first")
+                .with_next_steps("step 1"),
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("build", BlockMode::Watch, "echo second"),
+            AgentResponse::block("build", BlockMode::Watch, "echo second")
+                .with_next_steps("step 2"),
         )
         .add_step(
             |state: &State| {
@@ -140,7 +152,8 @@ async fn upsert_replaces_existing_title() {
                     .is_some_and(|o| o.stdout.contains("second") && !o.stdout.contains("first"));
                 assert!(found, "expected 'second' but not 'first' in build output, got: {:?}", state.outputs);
             },
-            AgentResponse::block("build", BlockMode::Close, ""),
+            AgentResponse::block("build", BlockMode::Close, "")
+                .with_next_steps("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -161,7 +174,8 @@ async fn write_mode_creates_file() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("test-file.txt", BlockMode::Write, "hello world"),
+            AgentResponse::block("test-file.txt", BlockMode::Write, "hello world")
+                .with_next_steps("writing file"),
         )
         .add_step(
             |state: &State| {
@@ -170,7 +184,8 @@ async fn write_mode_creates_file() {
                 let stdout = &output.unwrap().stdout;
                 assert!(stdout.contains("hello world"), "expected 'hello world' in output, got: {stdout}");
             },
-            AgentResponse::block("test-file.txt", BlockMode::Close, ""),
+            AgentResponse::block("test-file.txt", BlockMode::Close, "")
+                .with_next_steps("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -190,11 +205,13 @@ async fn edit_mode_modifies_file() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("edit-test.txt", BlockMode::Write, "line one\nline two\nline three"),
+            AgentResponse::block("edit-test.txt", BlockMode::Write, "line one\nline two\nline three")
+                .with_next_steps("creating file"),
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("edit-test.txt", BlockMode::Edit, "2c\nREPLACED"),
+            AgentResponse::block("edit-test.txt", BlockMode::Edit, "2c\nREPLACED")
+                .with_next_steps("editing file"),
         )
         .add_step(
             |state: &State| {
@@ -204,7 +221,8 @@ async fn edit_mode_modifies_file() {
                 assert!(stdout.contains("REPLACED"), "expected 'REPLACED' in output, got: {stdout}");
                 assert!(!stdout.contains("line two"), "should not contain 'line two', got: {stdout}");
             },
-            AgentResponse::block("edit-test.txt", BlockMode::Close, ""),
+            AgentResponse::block("edit-test.txt", BlockMode::Close, "")
+                .with_next_steps("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -224,11 +242,13 @@ async fn file_mode_shows_file() {
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("file-test.txt", BlockMode::Write, "file content here"),
+            AgentResponse::block("file-test.txt", BlockMode::Write, "file content here")
+                .with_next_steps("creating file"),
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("file-test.txt", BlockMode::File, ""),
+            AgentResponse::block("file-test.txt", BlockMode::File, "")
+                .with_next_steps("viewing file"),
         )
         .add_step(
             |state: &State| {
@@ -236,13 +256,41 @@ async fn file_mode_shows_file() {
                 assert!(output.is_some(), "expected file-test.txt in outputs");
                 assert!(output.unwrap().stdout.contains("file content here"));
             },
-            AgentResponse::block("file-test.txt", BlockMode::Close, ""),
+            AgentResponse::block("file-test.txt", BlockMode::Close, "")
+                .with_next_steps("closing"),
         );
 
     let mut server = test_server(session, agent);
     let state = State::default();
     let state = server.tick(state).await.unwrap();
     let state = server.tick(state).await.unwrap();
+    server.tick(state).await.unwrap();
+
+    assert_test_agent(&server);
+}
+
+#[tokio::test]
+#[traced_test]
+async fn next_steps_persists_across_ticks() {
+    let session = test_session();
+    let agent = TestAgent::new()
+        .add_step(
+            |_state: &State| {},
+            AgentResponse::block("build", BlockMode::Watch, "echo ok")
+                .with_next_steps("step 1: check build"),
+        )
+        .add_step(
+            |state: &State| {
+                assert_eq!(state.next_steps, "step 1: check build");
+            },
+            AgentResponse::block("build", BlockMode::Close, "")
+                .with_next_steps("step 2: done"),
+        );
+
+    let mut server = test_server(session, agent);
+    let state = State::default();
+    let state = server.tick(state).await.unwrap();
+    assert_eq!(state.next_steps, "step 1: check build");
     server.tick(state).await.unwrap();
 
     assert_test_agent(&server);

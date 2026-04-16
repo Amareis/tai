@@ -70,8 +70,9 @@ impl Server {
             let system = self.session.read_system_prompt().await;
             let tick = self.session.read_tick(1).await;
             let response = self.session.read_response().unwrap_or_default();
+            let next_steps = self.session.read_next_steps();
 
-            State::build(system, segments, outputs, tick, response)
+            State::build(system, segments, outputs, tick, next_steps, response)
         };
 
         info!(
@@ -108,7 +109,7 @@ impl Server {
 
             self.session.write_response(&state.response);
 
-            self.session.append_to_mind(&state.response.reasoning);
+            self.session.write_next_steps(&state.next_steps);
 
             self.session.write_index(&state.segments);
 
@@ -139,8 +140,9 @@ impl Server {
 
         let response = self.agent.step(&state).await?;
         info!(
-            "tick #{tick_n}: agent responded ({} segments)",
-            response.segments.len()
+            "tick #{tick_n}: agent responded ({} segments, next_steps {} bytes)",
+            response.segments.len(),
+            response.next_steps.len()
         );
 
         let mut pending_segments: Vec<ParsedBlock> = Vec::new();
@@ -164,6 +166,7 @@ impl Server {
         }
         state.segments.extend(pending_segments);
 
+        state.next_steps = response.next_steps.clone();
         state.response = response;
         state.tick_n += 1;
 
@@ -196,6 +199,7 @@ impl Server {
                 BlockMode::File => file_blocks.push(block),
                 BlockMode::Write => write_blocks.push(block),
                 BlockMode::Edit => edit_blocks.push(block),
+                BlockMode::NextSteps => {}
             }
         }
 
@@ -305,12 +309,13 @@ impl Server {
             }
         }
 
-        for block in &file_blocks {
+        for block in file_blocks {
             let watch_block = ParsedBlock {
                 window: block.window.clone(),
                 mode: BlockMode::Watch,
                 content: format!("cat -n {}", block.window),
                 prose: block.prose.clone(),
+                dashboard: block.dashboard,
             };
             upsert_segment(segments, watch_block);
         }
@@ -362,7 +367,7 @@ fn move_to_end(segments: &mut Vec<ParsedBlock>, window: &str) {
 
 async fn ask_user(question: &str) -> String {
     use std::io::Write;
-    println!("\n❓ {question}");
+    println!("\n? {question}");
     print!("> ");
     std::io::stdout().flush().ok();
     read_line().await.trim_end().to_string()

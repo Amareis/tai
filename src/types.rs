@@ -9,6 +9,7 @@ pub enum BlockMode {
     File,
     Edit,
     Write,
+    NextSteps,
 }
 
 impl std::str::FromStr for BlockMode {
@@ -23,8 +24,16 @@ impl std::str::FromStr for BlockMode {
             "file" => Ok(Self::File),
             "edit" => Ok(Self::Edit),
             "write" => Ok(Self::Write),
+            "next-steps" => Ok(Self::NextSteps),
             _ => Err(format!("unknown block mode: {s}")),
         }
+    }
+}
+
+impl BlockMode {
+    #[must_use]
+    pub fn requires_heredoc(self) -> bool {
+        matches!(self, BlockMode::Write | BlockMode::Edit)
     }
 }
 
@@ -38,6 +47,7 @@ impl std::fmt::Display for BlockMode {
             BlockMode::File => f.write_str("file"),
             BlockMode::Edit => f.write_str("edit"),
             BlockMode::Write => f.write_str("write"),
+            BlockMode::NextSteps => f.write_str("next-steps"),
         }
     }
 }
@@ -48,4 +58,6 @@ pub struct ParsedBlock {
     pub mode: BlockMode,
     pub content: String,
     pub prose: Option<String>,
+    #[serde(default)]
+    pub dashboard: bool,
 }

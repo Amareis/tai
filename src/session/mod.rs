@@ -49,7 +49,9 @@ impl SessionDir {
         let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
             .unwrap_or_else(|_| DEFAULT_TAI.to_string());
         let resp = parse_response(&tai_content);
+        let next_steps = resp.next_steps.clone();
         session.write_response(&resp);
+        session.write_next_steps(&next_steps);
 
         info!("session created: {}", session.workspace.display());
         Ok(session)
@@ -105,7 +107,9 @@ impl SessionDir {
                 let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
                     .unwrap_or_else(|_| DEFAULT_TAI.to_string());
                 let resp = parse_response(&tai_content);
+                let next_steps = resp.next_steps.clone();
                 session.write_response(&resp);
+                session.write_next_steps(&next_steps);
                 info!("session created at: {}", p.display());
                 Ok(session)
             }
@@ -224,19 +228,15 @@ impl SessionDir {
         toml::from_str(&std::fs::read_to_string(path).ok()?).ok()
     }
 
-    pub fn append_to_mind(&self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-        let path = self.workspace.join("mind.md");
-        let mut content = std::fs::read_to_string(&path).unwrap_or_default();
-        if !content.ends_with('\n') {
-            content.push('\n');
-        }
-        content.push_str("\n## Reasoning\n\n");
-        content.push_str(text);
-        content.push('\n');
-        std::fs::write(&path, content).ok();
+    #[must_use]
+    pub fn read_next_steps(&self) -> String {
+        let path = self.internal.join("next-steps.md");
+        std::fs::read_to_string(&path).unwrap_or_default()
+    }
+
+    pub fn write_next_steps(&self, steps: &str) {
+        let path = self.internal.join("next-steps.md");
+        std::fs::write(&path, steps).ok();
     }
 
     pub fn print_banner(&self) {

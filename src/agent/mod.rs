@@ -25,7 +25,9 @@ pub trait Agent: Send + Sync {
 pub struct AgentResponse {
     pub reasoning: String,
     pub segments: Vec<ParsedBlock>,
-    pub outro: Option<String>,
+    pub next_steps: String,
+    #[serde(skip)]
+    pub heredoc_violations: Vec<String>,
 }
 
 impl AgentResponse {
@@ -43,8 +45,10 @@ impl AgentResponse {
                 mode,
                 content: content.into(),
                 prose: None,
+                dashboard: false,
             }],
-            outro: None,
+            next_steps: String::new(),
+            heredoc_violations: Vec::new(),
         }
     }
 
@@ -57,6 +61,12 @@ impl AgentResponse {
     #[must_use]
     pub fn with_reasoning(mut self, reasoning: &str) -> Self {
         self.reasoning = reasoning.to_string();
+        self
+    }
+
+    #[must_use]
+    pub fn with_next_steps(mut self, steps: &str) -> Self {
+        self.next_steps = steps.to_string();
         self
     }
 }

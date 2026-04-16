@@ -6,15 +6,27 @@ pub mod edit_command;
 struct Header {
     window: String,
     mode: BlockMode,
+    dashboard: bool,
 }
 
+#[derive(Debug)]
 enum ParsedSegment {
     Block {
         window: String,
         mode: BlockMode,
+        dashboard: bool,
         content: String,
     },
     Prose(String),
+}
+
+fn mode_prefix(mode: BlockMode, dashboard: bool) -> String {
+    let base = mode.to_string();
+    if dashboard {
+        format!("{base}.dashboard")
+    } else {
+        base
+    }
 }
 
 #[must_use]
@@ -25,47 +37,35 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
             text.push_str(prose);
             text.push('\n');
         }
+        let prefix = mode_prefix(block.mode, block.dashboard);
         match block.mode {
-            BlockMode::Close => {
+            BlockMode::Close | BlockMode::File => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```close:{}\n```\n", block.window),
+                    format_args!("```{}:{}\n```\n", prefix, block.window),
                 );
             }
-            BlockMode::Watch => {
+            BlockMode::Watch
+            | BlockMode::Exec
+            | BlockMode::Ask => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```watch:{}\n{}\n```\n", block.window, block.content),
+                    format_args!("```{}:{}\n{}\n```\n", prefix, block.window, block.content),
                 );
             }
-            BlockMode::Exec => {
+            BlockMode::Write | BlockMode::Edit => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```exec:{}\n{}\n```\n", block.window, block.content),
+                    format_args!(
+                        "```{}:{}\n<<'TAI'\n{}\nTAI\n```\n",
+                        prefix, block.window, block.content
+                    ),
                 );
             }
-            BlockMode::Ask => {
+            BlockMode::NextSteps => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```ask:{}\n{}\n```\n", block.window, block.content),
-                );
-            }
-            BlockMode::File => {
-                let _ = std::fmt::Write::write_fmt(
-                    &mut text,
-                    format_args!("```file:{}\n```\n", block.window),
-                );
-            }
-            BlockMode::Edit => {
-                let _ = std::fmt::Write::write_fmt(
-                    &mut text,
-                    format_args!("```edit:{}\n{}\n```\n", block.window, block.content),
-                );
-            }
-            BlockMode::Write => {
-                let _ = std::fmt::Write::write_fmt(
-                    &mut text,
-                    format_args!("```write:{}\n{}\n```\n", block.window, block.content),
+                    format_args!("```next-steps\n{}\n```\n", block.content),
                 );
             }
         }
@@ -79,6 +79,8 @@ pub fn parse_response(input: &str) -> AgentResponse {
 
     let mut blocks: Vec<ParsedBlock> = Vec::new();
     let mut prose_buf: Option<String> = None;
+    let mut next_steps = String::new();
+    let mut heredoc_violations: Vec<String> = Vec::new();
 
     for segment in raw {
         match segment {
@@ -91,24 +93,53 @@ pub fn parse_response(input: &str) -> AgentResponse {
             ParsedSegment::Block {
                 window,
                 mode,
+                dashboard,
                 content,
             } => {
-                blocks.push(ParsedBlock {
-                    window,
-                    mode,
-                    content,
-                    prose: prose_buf.take(),
-                });
+                if mode == BlockMode::NextSteps {
+                    next_steps = content;
+                    prose_buf = None;
+                    continue;
+                }
+                if mode.requires_heredoc() {
+                    if let Some(extracted) = extract_heredoc_content(&content) {
+                        blocks.push(ParsedBlock {
+                            window,
+                            mode,
+                            content: extracted,
+                            prose: prose_buf.take(),
+                            dashboard,
+                        });
+                    } else {
+                        heredoc_violations.push(format!(
+                            "{mode}:{window} — content must use heredoc (<<'TAI' ... TAI)"
+                        ));
+                        blocks.push(ParsedBlock {
+                            window,
+                            mode,
+                            content,
+                            prose: prose_buf.take(),
+                            dashboard,
+                        });
+                    }
+                } else {
+                    blocks.push(ParsedBlock {
+                        window,
+                        mode,
+                        content,
+                        prose: prose_buf.take(),
+                        dashboard,
+                    });
+                }
             }
         }
     }
 
-    let outro = prose_buf.filter(|s| !s.is_empty());
-
     AgentResponse {
         reasoning: String::new(),
         segments: blocks,
-        outro,
+        next_steps,
+        heredoc_violations,
     }
 }
 
@@ -126,17 +157,19 @@ fn parse_response_segments(input: &str) -> Vec<ParsedSegment> {
                 }
             }
             let header_start = block_start + 3;
-            let (header_end, hdr) = parse_header(input, header_start);
+            let (header_end, hdr_opt) = parse_header(input, header_start);
 
             let (_body_end, close_end, content) = parse_block_body(input, header_end);
 
-            if !hdr.window.is_empty() {
-                segments.push(ParsedSegment::Block {
-                    window: hdr.window,
-                    mode: hdr.mode,
-                    content: content.trim_end().to_string(),
-                });
-            }
+            if let Some(hdr) = hdr_opt
+                && (!hdr.window.is_empty() || hdr.mode == BlockMode::NextSteps) {
+                    segments.push(ParsedSegment::Block {
+                        window: hdr.window,
+                        mode: hdr.mode,
+                        dashboard: hdr.dashboard,
+                        content: content.trim_end().to_string(),
+                    });
+                }
 
             pos = close_end;
         } else {
@@ -155,7 +188,7 @@ fn find_next_block(input: &str, from: usize) -> Option<usize> {
     input[from..].find("```").map(|p| from + p)
 }
 
-fn parse_header(input: &str, from: usize) -> (usize, Header) {
+fn parse_header(input: &str, from: usize) -> (usize, Option<Header>) {
     let newline_pos = input[from..].find('\n').map_or(input.len(), |p| from + p);
     let header_raw = input[from..newline_pos].trim();
     let header = parse_block_header(header_raw);
@@ -218,18 +251,62 @@ fn parse_block_body(input: &str, from: usize) -> (usize, usize, String) {
     (from, input.len(), content)
 }
 
-fn parse_block_header(header: &str) -> Header {
+fn parse_block_header(header: &str) -> Option<Header> {
     if let Some(pos) = header.find(':') {
         let mode_str = &header[..pos];
         let window = header[pos + 1..].to_string();
-        if let Ok(mode) = mode_str.parse::<BlockMode>() {
-            return Header { window, mode };
-        }
+        let (mode, dashboard) = parse_mode_spec(mode_str)?;
+        return Some(Header { window, mode, dashboard });
     }
 
-    Header {
-        window: header.to_string(),
-        mode: BlockMode::Watch,
+    let (mode, dashboard) = parse_mode_spec(header)?;
+    Some(Header {
+        window: String::new(),
+        mode,
+        dashboard,
+    })
+}
+
+fn parse_mode_spec(spec: &str) -> Option<(BlockMode, bool)> {
+    if let Some(base) = spec.strip_suffix(".dashboard") {
+        base.parse::<BlockMode>().ok().map(|m| (m, true))
+    } else {
+        spec.parse::<BlockMode>().ok().map(|m| (m, false))
+    }
+}
+
+fn extract_heredoc_content(raw: &str) -> Option<String> {
+    let trimmed = raw.trim_start();
+    let after = trimmed.strip_prefix("<<")?;
+    let after = after.trim_start();
+    let (delim, after_delim) = if let Some(rest) = after.strip_prefix('\'') {
+        let end = rest.find('\'')?;
+        (rest[..end].to_string(), &rest[end + 1..])
+    } else if let Some(rest) = after.strip_prefix('"') {
+        let end = rest.find('"')?;
+        (rest[..end].to_string(), &rest[end + 1..])
+    } else {
+        let delim: String = after
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        if delim.is_empty() {
+            return None;
+        }
+        let delim_len = delim.len();
+        (delim, &after[delim_len..])
+    };
+
+    let body = after_delim.strip_prefix('\n')?;
+
+    let end_marker = format!("\n{delim}");
+    if let Some(end_pos) = body.find(&end_marker) {
+        Some(body[..end_pos].to_string())
+    } else if body.trim_end().ends_with(&delim) {
+        let end_pos = body.len() - delim.len();
+        Some(body[..end_pos].trim_end_matches('\n').to_string())
+    } else {
+        Some(body.trim_end().to_string())
     }
 }
 
@@ -279,7 +356,7 @@ mod tests {
         assert!(matches!(&segments[0], ParsedSegment::Prose(_)));
         assert!(matches!(
             &segments[1],
-            ParsedSegment::Block { window, mode, content }
+            ParsedSegment::Block { window, mode, content, .. }
             if window == "build" && *mode == BlockMode::Watch && content == "cargo build"
         ));
         assert!(matches!(&segments[2], ParsedSegment::Prose(_)));
@@ -292,7 +369,7 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, mode, content }
+            ParsedSegment::Block { window, mode, content, .. }
             if window == "build" && *mode == BlockMode::Close && content.is_empty()
         ));
     }
@@ -329,15 +406,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_no_mode_suffix() {
+    fn test_parse_no_mode_suffix_skipped() {
         let text = "```build\ncargo test\n```";
         let segments = parse_response_segments(text);
-        assert_eq!(segments.len(), 1);
-        assert!(matches!(
-            &segments[0],
-            ParsedSegment::Block { window, mode, content }
-            if window == "build" && *mode == BlockMode::Watch && content == "cargo test"
-        ));
+        assert!(
+            segments.is_empty(),
+            "blocks without mode prefix should be skipped"
+        );
     }
 
     #[test]
@@ -354,33 +429,46 @@ mod tests {
 
     #[test]
     fn test_parse_header_prefix_format() {
-        let h = parse_block_header("build");
-        assert_eq!(h.window, "build");
-        assert_eq!(h.mode, BlockMode::Watch);
+        assert!(parse_block_header("build").is_none(), "no mode prefix should return None");
 
-        let h = parse_block_header("close:build");
+        let h = parse_block_header("close:build").unwrap();
         assert_eq!(h.window, "build");
         assert_eq!(h.mode, BlockMode::Close);
+        assert!(!h.dashboard);
 
-        let h = parse_block_header("watch:build");
+        let h = parse_block_header("watch:build").unwrap();
         assert_eq!(h.window, "build");
         assert_eq!(h.mode, BlockMode::Watch);
 
-        let h = parse_block_header("exec:install");
+        let h = parse_block_header("watch.dashboard:tree").unwrap();
+        assert_eq!(h.window, "tree");
+        assert_eq!(h.mode, BlockMode::Watch);
+        assert!(h.dashboard);
+
+        let h = parse_block_header("file.dashboard:mind.md").unwrap();
+        assert_eq!(h.window, "mind.md");
+        assert_eq!(h.mode, BlockMode::File);
+        assert!(h.dashboard);
+
+        let h = parse_block_header("exec:install").unwrap();
         assert_eq!(h.window, "install");
         assert_eq!(h.mode, BlockMode::Exec);
 
-        let h = parse_block_header("file:src/main.rs");
+        let h = parse_block_header("file:src/main.rs").unwrap();
         assert_eq!(h.window, "src/main.rs");
         assert_eq!(h.mode, BlockMode::File);
 
-        let h = parse_block_header("edit:src/main.rs");
+        let h = parse_block_header("edit:src/main.rs").unwrap();
         assert_eq!(h.window, "src/main.rs");
         assert_eq!(h.mode, BlockMode::Edit);
 
-        let h = parse_block_header("write:src/main.rs");
+        let h = parse_block_header("write:src/main.rs").unwrap();
         assert_eq!(h.window, "src/main.rs");
         assert_eq!(h.mode, BlockMode::Write);
+
+        let h = parse_block_header("next-steps").unwrap();
+        assert_eq!(h.window, "");
+        assert_eq!(h.mode, BlockMode::NextSteps);
     }
 
     #[test]
@@ -444,7 +532,7 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, mode, content }
+            ParsedSegment::Block { window, mode, content, .. }
             if window == "install" && *mode == BlockMode::Exec && content == "cargo add serde"
         ));
     }
@@ -457,7 +545,7 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, mode, content }
+            ParsedSegment::Block { window, mode, content, .. }
             if window == "write-config" && *mode == BlockMode::Exec && content.contains("[build]")
         ));
     }
@@ -469,7 +557,7 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, mode, content }
+            ParsedSegment::Block { window, mode, content, .. }
             if window == "src/main.rs" && *mode == BlockMode::File && content.is_empty()
         ));
     }
@@ -481,7 +569,7 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, mode, content }
+            ParsedSegment::Block { window, mode, content, .. }
             if window == "src/main.rs" && *mode == BlockMode::Edit && content.contains("10,15c")
         ));
     }
@@ -493,7 +581,7 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
-            ParsedSegment::Block { window, mode, content }
+            ParsedSegment::Block { window, mode, content, .. }
             if window == "src/main.rs" && *mode == BlockMode::Write && content == "fn main() {}"
         ));
     }
@@ -506,12 +594,14 @@ mod tests {
                 mode: BlockMode::Watch,
                 content: "cat mind.md".into(),
                 prose: Some("checking state".into()),
+                dashboard: false,
             },
             ParsedBlock {
                 window: "install".into(),
                 mode: BlockMode::Exec,
                 content: "cargo add serde".into(),
                 prose: None,
+                dashboard: false,
             },
         ];
 
@@ -522,6 +612,7 @@ mod tests {
         assert_eq!(parsed.segments[0].mode, BlockMode::Watch);
         assert_eq!(parsed.segments[0].content, "cat mind.md");
         assert_eq!(parsed.segments[0].prose.as_deref(), Some("checking state"));
+        assert!(!parsed.segments[0].dashboard);
         assert_eq!(parsed.segments[1].window, "install");
         assert_eq!(parsed.segments[1].mode, BlockMode::Exec);
     }
@@ -534,18 +625,21 @@ mod tests {
                 mode: BlockMode::File,
                 content: String::new(),
                 prose: None,
+                dashboard: false,
             },
             ParsedBlock {
                 window: "src/lib.rs".into(),
                 mode: BlockMode::Edit,
                 content: "10,15c\nfn new() {}\n".into(),
                 prose: None,
+                dashboard: false,
             },
             ParsedBlock {
                 window: "config.toml".into(),
                 mode: BlockMode::Write,
                 content: "[build]\nrelease = true\n".into(),
                 prose: None,
+                dashboard: false,
             },
         ];
 
@@ -555,5 +649,163 @@ mod tests {
         assert_eq!(parsed.segments[0].mode, BlockMode::File);
         assert_eq!(parsed.segments[1].mode, BlockMode::Edit);
         assert_eq!(parsed.segments[2].mode, BlockMode::Write);
+    }
+
+    #[test]
+    fn test_roundtrip_dashboard() {
+        let blocks = vec![
+            ParsedBlock {
+                window: "tree".into(),
+                mode: BlockMode::Watch,
+                content: "tree -l --gitignore".into(),
+                prose: None,
+                dashboard: true,
+            },
+            ParsedBlock {
+                window: "mind.md".into(),
+                mode: BlockMode::File,
+                content: String::new(),
+                prose: None,
+                dashboard: true,
+            },
+        ];
+
+        let text = serialize_blocks(&blocks);
+        assert!(text.contains("watch.dashboard:tree"));
+        assert!(text.contains("file.dashboard:mind.md"));
+        let parsed = parse_response(&text);
+        assert_eq!(parsed.segments.len(), 2);
+        assert!(parsed.segments[0].dashboard);
+        assert!(parsed.segments[1].dashboard);
+    }
+
+    #[test]
+    fn test_parse_dashboard_block() {
+        let text = "```watch.dashboard:tree\ntree -l\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.segments.len(), 1);
+        assert_eq!(resp.segments[0].window, "tree");
+        assert_eq!(resp.segments[0].mode, BlockMode::Watch);
+        assert!(resp.segments[0].dashboard);
+    }
+
+    #[test]
+    fn test_parse_file_dashboard_block() {
+        let text = "```file.dashboard:mind.md\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.segments.len(), 1);
+        assert_eq!(resp.segments[0].window, "mind.md");
+        assert_eq!(resp.segments[0].mode, BlockMode::File);
+        assert!(resp.segments[0].dashboard);
+    }
+
+    #[test]
+    fn test_parse_next_steps_block() {
+        let text =
+            "```next-steps\n1. Check build\n2. Fix errors\n```\n```watch:build\ncargo build\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.next_steps, "1. Check build\n2. Fix errors");
+        assert_eq!(resp.segments.len(), 1);
+        assert_eq!(resp.segments[0].window, "build");
+        assert_eq!(resp.segments[0].mode, BlockMode::Watch);
+    }
+
+    #[test]
+    fn test_parse_next_steps_only() {
+        let text = "Some reasoning\n\n```next-steps\nWait for user input then proceed\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.next_steps, "Wait for user input then proceed");
+        assert!(resp.segments.is_empty());
+    }
+
+    #[test]
+    fn test_parse_no_next_steps() {
+        let text = "```watch:build\ncargo build\n```";
+        let resp = parse_response(text);
+        assert!(resp.next_steps.is_empty());
+        assert_eq!(resp.segments.len(), 1);
+    }
+
+    #[test]
+    fn test_next_steps_not_in_segments() {
+        let text = "```next-steps\nmy plan\n```\n```watch:build\ncargo build\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.next_steps, "my plan");
+        assert_eq!(resp.segments.len(), 1);
+        assert!(resp.segments.iter().all(|s| s.mode != BlockMode::NextSteps));
+    }
+
+    #[test]
+    fn test_write_with_heredoc() {
+        let text = "```write:readme.md\n<<'TAI'\n# Hello\n```rust\nfn main() {}\n```\nTAI\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.segments.len(), 1);
+        assert_eq!(resp.segments[0].window, "readme.md");
+        assert_eq!(resp.segments[0].mode, BlockMode::Write);
+        assert!(resp.segments[0].content.contains("# Hello"));
+        assert!(resp.segments[0].content.contains("```rust"));
+        assert!(resp.segments[0].content.contains("fn main() {}"));
+        assert!(resp.heredoc_violations.is_empty());
+    }
+
+    #[test]
+    fn test_edit_with_heredoc() {
+        let text = "```edit:src/main.rs\n<<'TAI'\n10c\nfn new() {}\n.\nTAI\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.segments.len(), 1);
+        assert_eq!(resp.segments[0].window, "src/main.rs");
+        assert_eq!(resp.segments[0].mode, BlockMode::Edit);
+        assert!(resp.segments[0].content.contains("10c"));
+        assert!(resp.heredoc_violations.is_empty());
+    }
+
+    #[test]
+    fn test_write_without_heredoc_flagged() {
+        let text = "```write:readme.md\n# Hello\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.segments.len(), 1);
+        assert_eq!(resp.segments[0].content, "# Hello");
+        assert_eq!(resp.heredoc_violations.len(), 1);
+        assert!(resp.heredoc_violations[0].contains("write:readme.md"));
+    }
+
+    #[test]
+    fn test_edit_without_heredoc_flagged() {
+        let text = "```edit:src/main.rs\n10c\nREPLACED\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.heredoc_violations.len(), 1);
+        assert!(resp.heredoc_violations[0].contains("edit:src/main.rs"));
+    }
+
+    #[test]
+    fn test_serialize_write_uses_heredoc() {
+        let block = ParsedBlock {
+            window: "readme.md".into(),
+            mode: BlockMode::Write,
+            content: "# Hello\n```rust\nfn main() {}\n```".into(),
+            prose: None,
+            dashboard: false,
+        };
+        let text = serialize_blocks(&[block]);
+        assert!(text.contains("<<'TAI'"));
+        assert!(text.contains("\nTAI\n"));
+        let parsed = parse_response(&text);
+        assert!(parsed.heredoc_violations.is_empty());
+        assert!(parsed.segments[0].content.contains("```rust"));
+    }
+
+    #[test]
+    fn test_serialize_edit_uses_heredoc() {
+        let block = ParsedBlock {
+            window: "src/main.rs".into(),
+            mode: BlockMode::Edit,
+            content: "10c\nfn new() {}\n.".into(),
+            prose: None,
+            dashboard: false,
+        };
+        let text = serialize_blocks(&[block]);
+        assert!(text.contains("<<'TAI'"));
+        let parsed = parse_response(&text);
+        assert!(parsed.heredoc_violations.is_empty());
     }
 }
