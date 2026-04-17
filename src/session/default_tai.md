@@ -2,7 +2,7 @@ Current project structure.
 
 Project conventions and architecture reference.
 
-```file:agents.md
+```file:work/AGENTS.md
 ```
 
 ```watch.dashboard:tree

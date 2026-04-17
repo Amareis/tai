@@ -69,7 +69,7 @@ async fn tick_agent_runs_command() {
     let mut server = test_server(session, agent);
     let state = State::default();
     let state = server.tick(state).await.unwrap();
-    assert_eq!(state.segments.len(), 1);
+    assert_eq!(state.segments.len(), 0);
     server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
@@ -89,10 +89,16 @@ async fn close_removes_from_tracked() {
             |_state: &State| {},
             AgentResponse::block("build", BlockMode::Close, "")
                 .with_mind("closing"),
+        )
+        .add_step(
+            |_state: &State| {},
+            mind("done"),
         );
 
     let mut server = test_server(session, agent);
     let state = State::default();
+    let state = server.tick(state).await.unwrap();
+    assert_eq!(state.segments.len(), 0);
     let state = server.tick(state).await.unwrap();
     assert_eq!(state.segments.len(), 1);
     let state = server.tick(state).await.unwrap();
@@ -124,7 +130,7 @@ async fn exec_runs_once_then_caches() {
     let mut server = test_server(session, agent);
     let state = State::default();
     let state = server.tick(state).await.unwrap();
-    assert_eq!(state.segments.len(), 1);
+    assert_eq!(state.segments.len(), 0);
     server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
@@ -159,7 +165,7 @@ async fn upsert_replaces_existing_title() {
     let mut server = test_server(session, agent);
     let state = State::default();
     let state = server.tick(state).await.unwrap();
-    assert_eq!(state.segments.len(), 1);
+    assert_eq!(state.segments.len(), 0);
     let state = server.tick(state).await.unwrap();
     assert_eq!(state.segments.len(), 1);
     server.tick(state).await.unwrap();
@@ -191,7 +197,7 @@ async fn write_mode_creates_file() {
     let mut server = test_server(session, agent);
     let state = State::default();
     let state = server.tick(state).await.unwrap();
-    assert_eq!(state.segments.len(), 1);
+    assert_eq!(state.segments.len(), 0);
     server.tick(state).await.unwrap();
 
     assert_test_agent(&server);
