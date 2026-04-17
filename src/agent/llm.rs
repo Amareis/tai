@@ -60,7 +60,8 @@ impl Agent for LlmAgent {
             if needs_mind {
                 complaint.push_str(
                     "You forgot to include a `mind` block. \
-                     You MUST reply with a ```mind block containing your plan for the next tick. ",
+                     You MUST reply with a ```mind block containing your plan for the next tick. \
+                     It will be APPENDED to your previous answer, so you don't need to duplicate all other commands.",
                 );
             }
             if has_heredoc_violations {

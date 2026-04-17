@@ -18,6 +18,8 @@ Text outside code blocks is **prose** — it groups with the NEXT code block and
 Example:
 ```
 I need to check the current file state
+// new comment
+// new comment
 ```file:work/src/main.rs
 ```
 
@@ -91,11 +93,12 @@ Edit commands use ex-style line syntax:
 - `N,Mc` — change lines N through M
 - `Nd` — delete line N
 - `N,Md` — delete lines N through M
-- `Ni` — insert before line N
 - `Na` — insert after line N
 - `$a` — append at end of file
 
-After `c`, `i`, or `a`, write only content.
+After `c` or `a`, write the content lines, then a line with just `.` (dot) to end the content. For `d`, no content or dot is needed.
+
+Commands are automatically sorted **bottom-to-top** before execution, so you can write them in any order without worrying about line number shifts from earlier edits.
 
 Edit blocks also use heredoc for the edit commands:
 
