@@ -14,5 +14,8 @@ What we do today?
 ```
 
 ```next-steps
-Wait for user task input, then analyze the project and begin work.
+Facts: (none yet)
+Solved: (none yet)
+Current: Starting fresh — waiting for task input.
+Next: Analyze the project and begin work.
 ```

@@ -311,14 +311,7 @@ impl Server {
         }
 
         for block in file_blocks {
-            let watch_block = ParsedBlock {
-                window: block.window.clone(),
-                mode: BlockMode::Watch,
-                content: format!("cat -n {}", block.window),
-                prose: block.prose.clone(),
-                dashboard: block.dashboard,
-            };
-            upsert_segment(segments, watch_block);
+            upsert_segment(segments, block.clone());
         }
 
         for block in watch_blocks {
