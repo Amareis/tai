@@ -19,7 +19,7 @@ impl SessionDir {
     pub fn create_new(project_dir: &Path, debug: bool) -> Result<Self, std::io::Error> {
         let id = generate_short_id();
         let workspace = if debug {
-            project_dir.join(".tai").join(&id)
+            project_dir.join("../../tai-prev").join(&id)
         } else {
             std::env::temp_dir().join(format!("tai-{id}"))
         };
@@ -45,9 +45,7 @@ impl SessionDir {
         let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
             .unwrap_or_else(|_| DEFAULT_TAI.to_string());
         let resp = parse_response(&tai_content);
-        let mind = resp.mind.clone();
         session.write_tick_response(0, &resp);
-        session.write_mind(&mind);
 
         info!("session created: {}", session.workspace.display());
         Ok(session)
@@ -101,9 +99,7 @@ impl SessionDir {
                 let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
                     .unwrap_or_else(|_| DEFAULT_TAI.to_string());
                 let resp = parse_response(&tai_content);
-                let mind = resp.mind.clone();
                 session.write_tick_response(0, &resp);
-                session.write_mind(&mind);
                 info!("session created at: {}", p.display());
                 Ok(session)
             }

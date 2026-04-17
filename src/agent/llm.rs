@@ -179,9 +179,9 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
 
     let mut body = String::new();
 
-    if !state.mind.is_empty() {
+    if !state.response.mind.is_empty() {
         body.push_str("## Mind\n");
-        body.push_str(&state.mind);
+        body.push_str(&state.response.mind);
         body.push_str("\n\n");
     }
 
@@ -222,8 +222,8 @@ fn estimate_tokens(text: &str) -> usize {
 fn render_window_summary(state: &State) -> String {
     let mut body = String::from("== Windows ==\n");
     let mut total_tokens: usize = estimate_tokens(&state.system);
-    if !state.mind.is_empty() {
-        total_tokens += estimate_tokens(&state.mind);
+    if !state.response.mind.is_empty() {
+        total_tokens += estimate_tokens(&state.response.mind);
     }
 
     for segment in &state.segments {
@@ -232,14 +232,14 @@ fn render_window_summary(state: &State) -> String {
             total_tokens += tokens;
             let is_dashboard = segment.dashboard;
             let tag = if is_dashboard { "dashboard" } else { "active" };
-            let _ = std::fmt::Write::write_fmt(
+            let _ = Write::write_fmt(
                 &mut body,
                 format_args!("{}: ~{} tok ({})\n", segment.window, tokens, tag),
             );
         }
     }
 
-    let _ = std::fmt::Write::write_fmt(
+    let _ = Write::write_fmt(
         &mut body,
         format_args!(
             "\n== Context: ~{total_tokens} tokens | Tick #{} ==",

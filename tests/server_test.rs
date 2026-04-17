@@ -287,7 +287,7 @@ async fn mind_persists_across_ticks() {
         )
         .add_step(
             |state: &State| {
-                assert_eq!(state.mind, "step 1: check build");
+                assert_eq!(state.response.mind, "step 1: check build");
             },
             AgentResponse::block("build", BlockMode::Close, "")
                 .with_mind("step 2: done"),
@@ -296,7 +296,7 @@ async fn mind_persists_across_ticks() {
     let mut server = test_server(session, agent);
     let state = State::default();
     let state = server.tick(state).await.unwrap();
-    assert_eq!(state.mind, "step 1: check build");
+    assert_eq!(state.response.mind, "step 1: check build");
     server.tick(state).await.unwrap();
 
     assert_test_agent(&server);

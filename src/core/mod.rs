@@ -70,9 +70,8 @@ impl Server {
             let system = self.session.read_system_prompt().await;
             let tick = self.session.read_tick(0).await;
             let response = self.session.read_tick_response(tick).unwrap_or_default();
-            let mind = self.session.read_mind();
 
-            State::build(system, segments, outputs, tick, mind, response)
+            State::build(system, segments, outputs, tick, response)
         };
 
         info!(
@@ -109,8 +108,6 @@ impl Server {
 
             self.session.write_tick_response(state.tick_n, &state.response);
 
-            self.session.write_mind(&state.mind);
-
             self.session.write_index(&state.segments);
 
             self.session.write_tick(state.tick_n);
@@ -146,7 +143,6 @@ impl Server {
             response.mind.len()
         );
 
-        state.mind = response.mind.clone();
         state.response = response;
 
         info!("tick #{tick_n}: done");

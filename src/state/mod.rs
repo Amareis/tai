@@ -9,7 +9,6 @@ pub struct State {
     pub segments: Vec<ParsedBlock>,
     pub outputs: HashMap<String, CmdOutput>,
     pub tick_n: u64,
-    pub mind: String,
     pub response: AgentResponse,
 }
 
@@ -20,7 +19,6 @@ impl State {
         segments: Vec<ParsedBlock>,
         outputs: HashMap<String, CmdOutput>,
         tick_n: u64,
-        mind: String,
         response: AgentResponse,
     ) -> Self {
         Self {
@@ -28,7 +26,6 @@ impl State {
             segments,
             outputs,
             tick_n,
-            mind,
             response,
         }
     }
