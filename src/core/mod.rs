@@ -106,13 +106,14 @@ impl Server {
                 Ok(s) => state = s,
             }
 
-            self.session.write_tick_response(state.tick_n, &state.response);
+            self.session
+                .write_tick_response(state.tick_n, &state.response);
 
             self.session.write_index(&state.segments);
 
             self.session.write_tick(state.tick_n);
 
-            if state.segments.is_empty() {
+            if state.segments.is_empty() || state.response.complete {
                 break;
             }
         }
@@ -185,33 +186,23 @@ impl Server {
         }
 
         for block in &ask_blocks {
-            if let Some(output) = self.session.read_out(&block.window) {
-                debug!("execute: '{}' ask cached", block.window);
-                outputs.insert(block.window.clone(), output);
-            } else {
-                let answer = ask_user(&block.content).await;
-                info!("answer: '{}'", answer);
-                let output = crate::backend::CmdOutput {
-                    exit_code: 0,
-                    stdout: answer,
-                };
-                self.session.write_out(&block.window, &output);
-                outputs.insert(block.window.clone(), output);
-                upsert_segment(segments, (*block).clone());
-            }
+            let answer = ask_user(&block.content).await;
+            info!("answer: '{}'", answer);
+            let output = crate::backend::CmdOutput {
+                exit_code: 0,
+                stdout: answer,
+            };
+            self.session.write_out(&block.window, &output);
+            outputs.insert(block.window.clone(), output);
+            upsert_segment(segments, (*block).clone());
         }
 
         for block in &exec_blocks {
-            if let Some(output) = self.session.read_out(&block.window) {
-                debug!("execute: '{}' cached", block.window);
-                outputs.insert(block.window.clone(), output);
-            } else {
-                debug!("execute: '{}' exec", block.window);
-                let output = self.back.run(&block.window, &block.content).await;
-                self.session.write_out(&block.window, &output);
-                outputs.insert(block.window.clone(), output);
-                upsert_segment(segments, (*block).clone());
-            }
+            debug!("execute: '{}' exec", block.window);
+            let output = self.back.run(&block.window, &block.content).await;
+            self.session.write_out(&block.window, &output);
+            outputs.insert(block.window.clone(), output);
+            upsert_segment(segments, (*block).clone());
         }
 
         for block in &write_blocks {
@@ -225,7 +216,10 @@ impl Server {
             let output = self.back.run(&block.window, &cmd).await;
             self.session.write_out(&block.window, &output);
 
-            let file_view = self.back.run(&block.window, &format!("cat -n {}", block.window)).await;
+            let file_view = self
+                .back
+                .run(&block.window, &format!("cat -n {}", block.window))
+                .await;
             outputs.insert(block.window.clone(), file_view);
 
             move_to_end(segments, &block.window);
@@ -272,10 +266,7 @@ impl Server {
             let output = self.back.run(path, &script).await;
             self.session.write_out(path, &output);
 
-            let file_view = self
-                .back
-                .run(path, &format!("cat -n {path}"))
-                .await;
+            let file_view = self.back.run(path, &format!("cat -n {path}")).await;
             outputs.insert(path.clone(), file_view);
 
             move_to_end(segments, path);

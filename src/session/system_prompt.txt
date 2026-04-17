@@ -121,4 +121,12 @@ TAI
 
 ### Ending the Session
 
-Closing ALL windows ends the session.
+Use `mind:complete` to signal that the task is finished. This ends the session immediately:
+
+```
+```mind:complete
+Task finished successfully. All changes verified.
+```
+```
+
+Alternatively, closing ALL windows also ends the session.

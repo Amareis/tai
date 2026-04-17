@@ -26,6 +26,8 @@ pub struct AgentResponse {
     pub reasoning: String,
     pub segments: Vec<ParsedBlock>,
     pub mind: String,
+    #[serde(default)]
+    pub complete: bool,
     #[serde(skip)]
     pub heredoc_violations: Vec<String>,
 }
@@ -48,6 +50,7 @@ impl AgentResponse {
                 dashboard: false,
             }],
             mind: String::new(),
+            complete: false,
             heredoc_violations: Vec::new(),
         }
     }

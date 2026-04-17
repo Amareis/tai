@@ -80,6 +80,7 @@ pub fn parse_response(input: &str) -> AgentResponse {
     let mut blocks: Vec<ParsedBlock> = Vec::new();
     let mut prose_buf: Option<String> = None;
     let mut mind = String::new();
+    let mut complete = false;
     let mut heredoc_violations: Vec<String> = Vec::new();
 
     for segment in raw {
@@ -97,6 +98,9 @@ pub fn parse_response(input: &str) -> AgentResponse {
                 content,
             } => {
                 if mode == BlockMode::Mind {
+                    if window == "complete" {
+                        complete = true;
+                    }
                     mind = content;
                     prose_buf = None;
                     continue;
@@ -139,6 +143,7 @@ pub fn parse_response(input: &str) -> AgentResponse {
         reasoning: String::new(),
         segments: blocks,
         mind,
+        complete,
         heredoc_violations,
     }
 }
@@ -792,6 +797,31 @@ mod tests {
         let parsed = parse_response(&text);
         assert!(parsed.heredoc_violations.is_empty());
         assert!(parsed.segments[0].content.contains("```rust"));
+    }
+    #[test]
+    fn test_mind_complete_sets_flag() {
+        let text = "```mind:complete\nTask finished\n```";
+        let resp = parse_response(text);
+        assert!(resp.complete);
+        assert_eq!(resp.mind, "Task finished");
+        assert!(resp.segments.is_empty());
+    }
+
+    #[test]
+    fn test_mind_complete_with_blocks() {
+        let text = "```watch:build\ncargo build\n```\n```mind:complete\nAll done\n```";
+        let resp = parse_response(text);
+        assert!(resp.complete);
+        assert_eq!(resp.mind, "All done");
+        assert_eq!(resp.segments.len(), 1);
+    }
+
+    #[test]
+    fn test_mind_without_complete_no_flag() {
+        let text = "```mind\nStill working\n```";
+        let resp = parse_response(text);
+        assert!(!resp.complete);
+        assert_eq!(resp.mind, "Still working");
     }
 
     #[test]
