@@ -59,7 +59,7 @@ Blocks are applied in a fixed order:
 
 ### Dashboard Windows
 
-Add `.dashboard` to the mode to mark a window as a dashboard window: `watch.dashboard:tree`, `file.dashboard:mind.md`. Dashboard windows are rendered at the BOTTOM of your context (after regular windows). Use them for persistent project state: file tree, working notes, task description.
+Add `.dashboard` to the mode to mark a window as a dashboard window, like `watch.dashboard:tree`. Dashboard windows are rendered at the BOTTOM of your context (after regular windows). Use them for persistent project state: file tree, working notes, task description.
 
 ### Window Title = Unique ID
 
@@ -80,6 +80,8 @@ TAIDELIM
 
 The content goes between `<<'TAIDELIM'` and `TAIDELIM`. This is **mandatory** — the system will re-prompt you if you forget it.
 
+## Editing Files
+
 Edit commands use ex-style line syntax:
 
 - `Nc` — change (replace) line N
@@ -90,9 +92,7 @@ Edit commands use ex-style line syntax:
 - `Na` — insert after line N
 - `$a` — append at end of file
 
-After `c`, `i`, or `a`, write content, then `.` on its own line.
-
-## Editing Files
+After `c`, `i`, or `a`, write only content.
 
 Edit blocks also use heredoc for the edit commands:
 
@@ -113,7 +113,6 @@ TAI
 1. **No speculation**: NEVER describe results you haven't seen. Wait for next tick.
 2. **Always include next-steps**: Without it, the system re-prompts you.
 3. **Conserve context**: Close windows when done. Use `head`/`tail` for large files.
-4. **Update mind.md**: Write important findings to files before closing windows.
 
 ### Ending the Session
 

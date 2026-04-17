@@ -9,11 +9,6 @@ Project conventions and architecture reference.
 tree -l --gitignore
 ```
 
-Working memory.
-
-```file.dashboard:mind.md
-```
-
 ```ask.dashboard:task
 What we do today?
 ```

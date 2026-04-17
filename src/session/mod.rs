@@ -7,7 +7,6 @@ use tracing::info;
 use uuid::Uuid;
 
 const SYSTEM_PROMPT: &str = include_str!("system_prompt.txt");
-const DEFAULT_MIND: &str = include_str!("default_mind.md");
 const DEFAULT_TAI: &str = include_str!("default_tai.md");
 
 pub struct SessionDir {
@@ -36,10 +35,6 @@ impl SessionDir {
 
         std::fs::write(internal.join("system-prompt.txt"), SYSTEM_PROMPT)?;
         std::fs::write(internal.join("tick"), "0")?;
-
-        if !workspace.join("mind.md").exists() {
-            std::fs::write(workspace.join("mind.md"), DEFAULT_MIND)?;
-        }
 
         let session = Self {
             workspace,
@@ -103,9 +98,6 @@ impl SessionDir {
                 }
                 std::fs::write(session.internal.join("system-prompt.txt"), SYSTEM_PROMPT)?;
                 std::fs::write(session.internal.join("tick"), "0")?;
-                if !session.workspace.join("mind.md").exists() {
-                    std::fs::write(session.workspace.join("mind.md"), DEFAULT_MIND)?;
-                }
                 let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
                     .unwrap_or_else(|_| DEFAULT_TAI.to_string());
                 let resp = parse_response(&tai_content);
