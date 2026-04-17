@@ -20,7 +20,7 @@ pub fn create_server(
 ) -> Result<Server, Box<dyn std::error::Error>> {
     let cwd = session.workspace().to_path_buf();
     let back = Box::new(backend::local::LocalBackend::new(cwd));
-    Ok(Server::with_backend(session, back, agent))
+    Ok(Server::new(session, back, agent))
 }
 
 pub async fn run_server(

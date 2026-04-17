@@ -178,20 +178,17 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
         vec![ChatCompletionRequestSystemMessage::from(state.system.clone()).into()];
 
     let mut body = String::new();
-
-    if !state.response.mind.is_empty() {
-        body.push_str("## Mind\n");
-        body.push_str(&state.response.mind);
-        body.push_str("\n\n");
-    }
-
     let (regular, dashboard): (Vec<_>, Vec<_>) =
         state.segments.iter().partition(|s| !s.dashboard);
 
     write_blocks(&mut body, &regular, state);
 
-    if !dashboard.is_empty() {
-        write_blocks(&mut body, &dashboard, state);
+    write_blocks(&mut body, &dashboard, state);
+
+    if !state.response.mind.is_empty() {
+        body.push_str("## Mind\n");
+        body.push_str(&state.response.mind);
+        body.push_str("\n\n");
     }
 
     body.push_str(&render_window_summary(state));
@@ -202,15 +199,17 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
 
 fn write_blocks(to: &mut impl Write, segments: &[&ParsedBlock], state: &State) {
     for segment in segments {
+        writeln!(to, "## [{}]", segment.window).ok();
         if let Some(output) = state.outputs.get(&segment.window) {
-            let _ = writeln!(to, "## [{}]", segment.window);
             if !output.stdout.is_empty() {
-                let _ = write!(to, "{}", output.stdout);
+                write!(to, "{}", output.stdout).ok();
                 if !output.stdout.ends_with('\n') {
-                    let _ = writeln!(to);
+                    writeln!(to).ok();
                 }
             }
-            let _ = write!(to, "exit {}\n\n", output.exit_code);
+            write!(to, "exit {}\n\n", output.exit_code).ok();
+        } else {
+            writeln!(to, "UNKNOWN OUTPUT\n").ok();
         }
     }
 }
@@ -232,19 +231,19 @@ fn render_window_summary(state: &State) -> String {
             total_tokens += tokens;
             let is_dashboard = segment.dashboard;
             let tag = if is_dashboard { "dashboard" } else { "active" };
-            let _ = Write::write_fmt(
+            Write::write_fmt(
                 &mut body,
                 format_args!("{}: ~{} tok ({})\n", segment.window, tokens, tag),
-            );
+            ).ok();
         }
     }
 
-    let _ = Write::write_fmt(
+    Write::write_fmt(
         &mut body,
         format_args!(
             "\n== Context: ~{total_tokens} tokens | Tick #{} ==",
             state.tick_n
         ),
-    );
+    ).ok();
     body
 }

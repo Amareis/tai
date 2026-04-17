@@ -32,18 +32,7 @@ pub struct Server {
 
 impl Server {
     #[must_use]
-    pub fn new(session: SessionDir, _back: Box<dyn Agent>, agent: Box<dyn Agent>) -> Self {
-        let cwd = session.workspace().to_path_buf();
-        Self {
-            session,
-            back: Box::new(crate::backend::local::LocalBackend::new(cwd)),
-            agent,
-            debug: false,
-        }
-    }
-
-    #[must_use]
-    pub fn with_backend(
+    pub fn new(
         session: SessionDir,
         back: Box<dyn Backend>,
         agent: Box<dyn Agent>,
@@ -54,11 +43,6 @@ impl Server {
             agent,
             debug: false,
         }
-    }
-
-    #[must_use]
-    pub fn segment_count(&self) -> usize {
-        self.session.read_index().len()
     }
 
     pub async fn run(&mut self) -> Result<(), CoreError> {

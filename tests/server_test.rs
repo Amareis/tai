@@ -23,7 +23,7 @@ fn test_session() -> SessionDir {
 
 fn test_server(session: SessionDir, agent: TestAgent) -> Server {
     let cwd = session.workspace().to_path_buf();
-    Server::with_backend(session, Box::new(LocalBackend::new(cwd)), Box::new(agent))
+    Server::new(session, Box::new(LocalBackend::new(cwd)), Box::new(agent))
 }
 
 fn mind(steps: &str) -> AgentResponse {
