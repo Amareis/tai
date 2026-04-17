@@ -139,6 +139,7 @@ impl Server {
         self.debug_wait("before agent call").await;
 
         let response = self.agent.step(&state).await?;
+        self.session.write_tick_response(tick_n, &response);
         info!(
             "tick #{tick_n}: agent responded ({} segments, next_steps {} bytes)",
             response.segments.len(),
