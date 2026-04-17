@@ -13,8 +13,8 @@ What we do today?
 ```
 
 ```mind
-Facts: (none yet)
-Solved: (none yet)
-Current: Starting fresh — waiting for task input.
-Next: Analyze the project and begin work.
+Known: (none yet)
+Resolved: (none yet)
+Context: Starting fresh — waiting for task input.
+Do: Analyze the project and begin work.
 ```
