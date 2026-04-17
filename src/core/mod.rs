@@ -68,8 +68,8 @@ impl Server {
             let segments = self.session.read_index();
             let outputs = self.session.read_all_outputs(&segments);
             let system = self.session.read_system_prompt().await;
-            let tick = self.session.read_tick(1).await;
-            let response = self.session.read_response().unwrap_or_default();
+            let tick = self.session.read_tick(0).await;
+            let response = self.session.read_tick_response(tick).unwrap_or_default();
             let mind = self.session.read_mind();
 
             State::build(system, segments, outputs, tick, mind, response)
@@ -107,7 +107,7 @@ impl Server {
                 Ok(s) => state = s,
             }
 
-            self.session.write_response(&state.response);
+            self.session.write_tick_response(state.tick_n, &state.response);
 
             self.session.write_mind(&state.mind);
 
@@ -124,6 +124,7 @@ impl Server {
     }
 
     pub async fn tick(&mut self, mut state: State) -> Result<State, CoreError> {
+        state.tick_n += 1;
         let tick_n = state.tick_n;
         info!("tick #{tick_n}: start");
 
@@ -139,37 +140,14 @@ impl Server {
         self.debug_wait("before agent call").await;
 
         let response = self.agent.step(&state).await?;
-        self.session.write_tick_response(tick_n, &response);
         info!(
             "tick #{tick_n}: agent responded ({} segments, mind {} bytes)",
             response.segments.len(),
             response.mind.len()
         );
 
-        let mut pending_segments: Vec<ParsedBlock> = Vec::new();
-        for block in &response.segments {
-            match block.mode {
-                BlockMode::Close => {
-                    state.segments.retain(|s| s.window != block.window);
-                }
-                _ => {
-                    if let Some(pos) =
-                        state.segments.iter().position(|s| s.window == block.window)
-                    {
-                        if let Some(seg) = state.segments.get_mut(pos) {
-                            *seg = block.clone();
-                        }
-                    } else {
-                        pending_segments.push(block.clone());
-                    }
-                }
-            }
-        }
-        state.segments.extend(pending_segments);
-
         state.mind = response.mind.clone();
         state.response = response;
-        state.tick_n += 1;
 
         info!("tick #{tick_n}: done");
         Ok(state)

@@ -46,7 +46,7 @@ impl SessionDir {
             .unwrap_or_else(|_| DEFAULT_TAI.to_string());
         let resp = parse_response(&tai_content);
         let mind = resp.mind.clone();
-        session.write_response(&resp);
+        session.write_tick_response(0, &resp);
         session.write_mind(&mind);
 
         info!("session created: {}", session.workspace.display());
@@ -102,7 +102,7 @@ impl SessionDir {
                     .unwrap_or_else(|_| DEFAULT_TAI.to_string());
                 let resp = parse_response(&tai_content);
                 let mind = resp.mind.clone();
-                session.write_response(&resp);
+                session.write_tick_response(0, &resp);
                 session.write_mind(&mind);
                 info!("session created at: {}", p.display());
                 Ok(session)
@@ -208,20 +208,6 @@ impl SessionDir {
         outputs
     }
 
-    pub fn write_response(&self, response: &AgentResponse) {
-        let path = self.internal.join("response.toml");
-        std::fs::write(
-            &path,
-            toml::to_string(response).unwrap_or_else(|e| e.to_string()),
-        )
-        .ok();
-    }
-    #[must_use]
-    pub fn read_response(&self) -> Option<AgentResponse> {
-        let path = self.internal.join("response.toml");
-        toml::from_str(&std::fs::read_to_string(path).ok()?).ok()
-    }
-
     #[must_use]
     pub fn read_mind(&self) -> String {
         let path = self.internal.join("mind.md");
@@ -236,7 +222,7 @@ impl SessionDir {
     pub fn write_tick_response(&self, tick_n: u64, response: &AgentResponse) {
         let dir = self.internal.join("responses");
         std::fs::create_dir_all(&dir).ok();
-        let path = dir.join(format!("{tick_n}.toml"));
+        let path = dir.join(format!("{tick_n:->5}.toml"));
         std::fs::write(
             &path,
             toml::to_string(response).unwrap_or_else(|e| e.to_string()),
@@ -249,7 +235,7 @@ impl SessionDir {
         let path = self
             .internal
             .join("responses")
-            .join(format!("{tick_n}.toml"));
+            .join(format!("{tick_n:->5}.toml"));
         toml::from_str(&std::fs::read_to_string(path).ok()?).ok()
     }
 
