@@ -9,7 +9,7 @@ pub enum BlockMode {
     File,
     Edit,
     Write,
-    NextSteps,
+    Mind,
 }
 
 impl std::str::FromStr for BlockMode {
@@ -24,7 +24,7 @@ impl std::str::FromStr for BlockMode {
             "file" => Ok(Self::File),
             "edit" => Ok(Self::Edit),
             "write" => Ok(Self::Write),
-            "next-steps" => Ok(Self::NextSteps),
+            "mind" => Ok(Self::Mind),
             _ => Err(format!("unknown block mode: {s}")),
         }
     }
@@ -47,7 +47,7 @@ impl std::fmt::Display for BlockMode {
             BlockMode::File => f.write_str("file"),
             BlockMode::Edit => f.write_str("edit"),
             BlockMode::Write => f.write_str("write"),
-            BlockMode::NextSteps => f.write_str("next-steps"),
+            BlockMode::Mind => f.write_str("mind"),
         }
     }
 }

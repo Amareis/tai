@@ -13,7 +13,7 @@ tree -l --gitignore
 What we do today?
 ```
 
-```next-steps
+```mind
 Facts: (none yet)
 Solved: (none yet)
 Current: Starting fresh — waiting for task input.

@@ -45,9 +45,9 @@ impl SessionDir {
         let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
             .unwrap_or_else(|_| DEFAULT_TAI.to_string());
         let resp = parse_response(&tai_content);
-        let next_steps = resp.next_steps.clone();
+        let mind = resp.mind.clone();
         session.write_response(&resp);
-        session.write_next_steps(&next_steps);
+        session.write_mind(&mind);
 
         info!("session created: {}", session.workspace.display());
         Ok(session)
@@ -101,9 +101,9 @@ impl SessionDir {
                 let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
                     .unwrap_or_else(|_| DEFAULT_TAI.to_string());
                 let resp = parse_response(&tai_content);
-                let next_steps = resp.next_steps.clone();
+                let mind = resp.mind.clone();
                 session.write_response(&resp);
-                session.write_next_steps(&next_steps);
+                session.write_mind(&mind);
                 info!("session created at: {}", p.display());
                 Ok(session)
             }
@@ -223,13 +223,13 @@ impl SessionDir {
     }
 
     #[must_use]
-    pub fn read_next_steps(&self) -> String {
-        let path = self.internal.join("next-steps.md");
+    pub fn read_mind(&self) -> String {
+        let path = self.internal.join("mind.md");
         std::fs::read_to_string(&path).unwrap_or_default()
     }
 
-    pub fn write_next_steps(&self, steps: &str) {
-        let path = self.internal.join("next-steps.md");
+    pub fn write_mind(&self, steps: &str) {
+        let path = self.internal.join("mind.md");
         std::fs::write(&path, steps).ok();
     }
 

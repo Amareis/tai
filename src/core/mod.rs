@@ -70,9 +70,9 @@ impl Server {
             let system = self.session.read_system_prompt().await;
             let tick = self.session.read_tick(1).await;
             let response = self.session.read_response().unwrap_or_default();
-            let next_steps = self.session.read_next_steps();
+            let mind = self.session.read_mind();
 
-            State::build(system, segments, outputs, tick, next_steps, response)
+            State::build(system, segments, outputs, tick, mind, response)
         };
 
         info!(
@@ -109,7 +109,7 @@ impl Server {
 
             self.session.write_response(&state.response);
 
-            self.session.write_next_steps(&state.next_steps);
+            self.session.write_mind(&state.mind);
 
             self.session.write_index(&state.segments);
 
@@ -141,9 +141,9 @@ impl Server {
         let response = self.agent.step(&state).await?;
         self.session.write_tick_response(tick_n, &response);
         info!(
-            "tick #{tick_n}: agent responded ({} segments, next_steps {} bytes)",
+            "tick #{tick_n}: agent responded ({} segments, mind {} bytes)",
             response.segments.len(),
-            response.next_steps.len()
+            response.mind.len()
         );
 
         let mut pending_segments: Vec<ParsedBlock> = Vec::new();
@@ -167,7 +167,7 @@ impl Server {
         }
         state.segments.extend(pending_segments);
 
-        state.next_steps = response.next_steps.clone();
+        state.mind = response.mind.clone();
         state.response = response;
         state.tick_n += 1;
 
@@ -200,7 +200,7 @@ impl Server {
                 BlockMode::File => file_blocks.push(block),
                 BlockMode::Write => write_blocks.push(block),
                 BlockMode::Edit => edit_blocks.push(block),
-                BlockMode::NextSteps => {}
+                BlockMode::Mind => {}
             }
         }
 

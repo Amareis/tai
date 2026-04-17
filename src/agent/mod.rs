@@ -25,7 +25,7 @@ pub trait Agent: Send + Sync {
 pub struct AgentResponse {
     pub reasoning: String,
     pub segments: Vec<ParsedBlock>,
-    pub next_steps: String,
+    pub mind: String,
     #[serde(skip)]
     pub heredoc_violations: Vec<String>,
 }
@@ -47,7 +47,7 @@ impl AgentResponse {
                 prose: None,
                 dashboard: false,
             }],
-            next_steps: String::new(),
+            mind: String::new(),
             heredoc_violations: Vec::new(),
         }
     }
@@ -65,8 +65,8 @@ impl AgentResponse {
     }
 
     #[must_use]
-    pub fn with_next_steps(mut self, steps: &str) -> Self {
-        self.next_steps = steps.to_string();
+    pub fn with_mind(mut self, mind: &str) -> Self {
+        self.mind = mind.to_string();
         self
     }
 }

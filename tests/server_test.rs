@@ -26,8 +26,8 @@ fn test_server(session: SessionDir, agent: TestAgent) -> Server {
     Server::with_backend(session, Box::new(LocalBackend::new(cwd)), Box::new(agent))
 }
 
-fn ns(steps: &str) -> AgentResponse {
-    AgentResponse::new().with_next_steps(steps)
+fn mind(steps: &str) -> AgentResponse {
+    AgentResponse::new().with_mind(steps)
 }
 
 #[tokio::test]
@@ -36,7 +36,7 @@ async fn tick_empty_session() {
     let session = test_session();
     let agent = TestAgent::new().add_step(
         |_state: &State| {},
-        ns("done"),
+        mind("done"),
     );
 
     let mut server = test_server(session, agent);
@@ -54,7 +54,7 @@ async fn tick_agent_runs_command() {
         .add_step(
             |_state: &State| {},
             AgentResponse::block("build", BlockMode::Watch, "echo marker-xyz")
-                .with_next_steps("check build output"),
+                .with_mind("check build output"),
         )
         .add_step(
             |state: &State| {
@@ -63,7 +63,7 @@ async fn tick_agent_runs_command() {
                 assert!(found, "expected marker-xyz in outputs, got: {:?}", state.outputs);
             },
             AgentResponse::block("build", BlockMode::Close, "")
-                .with_next_steps("closing build"),
+                .with_mind("closing build"),
         );
 
     let mut server = test_server(session, agent);
@@ -83,12 +83,12 @@ async fn close_removes_from_tracked() {
         .add_step(
             |_state: &State| {},
             AgentResponse::block("build", BlockMode::Watch, "echo hello")
-                .with_next_steps("watching build"),
+                .with_mind("watching build"),
         )
         .add_step(
             |_state: &State| {},
             AgentResponse::block("build", BlockMode::Close, "")
-                .with_next_steps("closing"),
+                .with_mind("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -109,7 +109,7 @@ async fn exec_runs_once_then_caches() {
         .add_step(
             |_state: &State| {},
             AgentResponse::block("install", BlockMode::Exec, "echo installed-once")
-                .with_next_steps("installing"),
+                .with_mind("installing"),
         )
         .add_step(
             |state: &State| {
@@ -118,7 +118,7 @@ async fn exec_runs_once_then_caches() {
                 assert!(found, "expected 'installed-once' in install output, got: {:?}", state.outputs);
             },
             AgentResponse::block("install", BlockMode::Close, "")
-                .with_next_steps("closing"),
+                .with_mind("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -138,12 +138,12 @@ async fn upsert_replaces_existing_title() {
         .add_step(
             |_state: &State| {},
             AgentResponse::block("build", BlockMode::Watch, "echo first")
-                .with_next_steps("step 1"),
+                .with_mind("step 1"),
         )
         .add_step(
             |_state: &State| {},
             AgentResponse::block("build", BlockMode::Watch, "echo second")
-                .with_next_steps("step 2"),
+                .with_mind("step 2"),
         )
         .add_step(
             |state: &State| {
@@ -153,7 +153,7 @@ async fn upsert_replaces_existing_title() {
                 assert!(found, "expected 'second' but not 'first' in build output, got: {:?}", state.outputs);
             },
             AgentResponse::block("build", BlockMode::Close, "")
-                .with_next_steps("closing"),
+                .with_mind("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -175,7 +175,7 @@ async fn write_mode_creates_file() {
         .add_step(
             |_state: &State| {},
             AgentResponse::block("test-file.txt", BlockMode::Write, "hello world")
-                .with_next_steps("writing file"),
+                .with_mind("writing file"),
         )
         .add_step(
             |state: &State| {
@@ -185,7 +185,7 @@ async fn write_mode_creates_file() {
                 assert!(stdout.contains("hello world"), "expected 'hello world' in output, got: {stdout}");
             },
             AgentResponse::block("test-file.txt", BlockMode::Close, "")
-                .with_next_steps("closing"),
+                .with_mind("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -206,12 +206,12 @@ async fn edit_mode_modifies_file() {
         .add_step(
             |_state: &State| {},
             AgentResponse::block("edit-test.txt", BlockMode::Write, "line one\nline two\nline three")
-                .with_next_steps("creating file"),
+                .with_mind("creating file"),
         )
         .add_step(
             |_state: &State| {},
             AgentResponse::block("edit-test.txt", BlockMode::Edit, "2c\nREPLACED")
-                .with_next_steps("editing file"),
+                .with_mind("editing file"),
         )
         .add_step(
             |state: &State| {
@@ -222,7 +222,7 @@ async fn edit_mode_modifies_file() {
                 assert!(!stdout.contains("line two"), "should not contain 'line two', got: {stdout}");
             },
             AgentResponse::block("edit-test.txt", BlockMode::Close, "")
-                .with_next_steps("closing"),
+                .with_mind("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -243,12 +243,12 @@ async fn file_mode_shows_file() {
         .add_step(
             |_state: &State| {},
             AgentResponse::block("file-test.txt", BlockMode::Write, "file content here")
-                .with_next_steps("creating file"),
+                .with_mind("creating file"),
         )
         .add_step(
             |_state: &State| {},
             AgentResponse::block("file-test.txt", BlockMode::File, "")
-                .with_next_steps("viewing file"),
+                .with_mind("viewing file"),
         )
         .add_step(
             |state: &State| {
@@ -257,7 +257,7 @@ async fn file_mode_shows_file() {
                 assert!(output.unwrap().stdout.contains("file content here"));
             },
             AgentResponse::block("file-test.txt", BlockMode::Close, "")
-                .with_next_steps("closing"),
+                .with_mind("closing"),
         );
 
     let mut server = test_server(session, agent);
@@ -271,26 +271,26 @@ async fn file_mode_shows_file() {
 
 #[tokio::test]
 #[traced_test]
-async fn next_steps_persists_across_ticks() {
+async fn mind_persists_across_ticks() {
     let session = test_session();
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
             AgentResponse::block("build", BlockMode::Watch, "echo ok")
-                .with_next_steps("step 1: check build"),
+                .with_mind("step 1: check build"),
         )
         .add_step(
             |state: &State| {
-                assert_eq!(state.next_steps, "step 1: check build");
+                assert_eq!(state.mind, "step 1: check build");
             },
             AgentResponse::block("build", BlockMode::Close, "")
-                .with_next_steps("step 2: done"),
+                .with_mind("step 2: done"),
         );
 
     let mut server = test_server(session, agent);
     let state = State::default();
     let state = server.tick(state).await.unwrap();
-    assert_eq!(state.next_steps, "step 1: check build");
+    assert_eq!(state.mind, "step 1: check build");
     server.tick(state).await.unwrap();
 
     assert_test_agent(&server);

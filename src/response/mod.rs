@@ -62,10 +62,10 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                     ),
                 );
             }
-            BlockMode::NextSteps => {
+            BlockMode::Mind => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```next-steps\n{}\n```\n", block.content),
+                    format_args!("```mind\n{}\n```\n", block.content),
                 );
             }
         }
@@ -79,7 +79,7 @@ pub fn parse_response(input: &str) -> AgentResponse {
 
     let mut blocks: Vec<ParsedBlock> = Vec::new();
     let mut prose_buf: Option<String> = None;
-    let mut next_steps = String::new();
+    let mut mind = String::new();
     let mut heredoc_violations: Vec<String> = Vec::new();
 
     for segment in raw {
@@ -96,8 +96,8 @@ pub fn parse_response(input: &str) -> AgentResponse {
                 dashboard,
                 content,
             } => {
-                if mode == BlockMode::NextSteps {
-                    next_steps = content;
+                if mode == BlockMode::Mind {
+                    mind = content;
                     prose_buf = None;
                     continue;
                 }
@@ -138,7 +138,7 @@ pub fn parse_response(input: &str) -> AgentResponse {
     AgentResponse {
         reasoning: String::new(),
         segments: blocks,
-        next_steps,
+        mind,
         heredoc_violations,
     }
 }
@@ -162,7 +162,7 @@ fn parse_response_segments(input: &str) -> Vec<ParsedSegment> {
             let (_body_end, close_end, content) = parse_block_body(input, header_end);
 
             if let Some(hdr) = hdr_opt
-                && (!hdr.window.is_empty() || hdr.mode == BlockMode::NextSteps) {
+                && (!hdr.window.is_empty() || hdr.mode == BlockMode::Mind) {
                     segments.push(ParsedSegment::Block {
                         window: hdr.window,
                         mode: hdr.mode,
@@ -466,9 +466,9 @@ mod tests {
         assert_eq!(h.window, "src/main.rs");
         assert_eq!(h.mode, BlockMode::Write);
 
-        let h = parse_block_header("next-steps").unwrap();
+        let h = parse_block_header("mind").unwrap();
         assert_eq!(h.window, "");
-        assert_eq!(h.mode, BlockMode::NextSteps);
+        assert_eq!(h.mode, BlockMode::Mind);
     }
 
     #[test]
@@ -700,39 +700,39 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_next_steps_block() {
+    fn test_parse_mind_block() {
         let text =
-            "```next-steps\n1. Check build\n2. Fix errors\n```\n```watch:build\ncargo build\n```";
+            "```mind\n1. Check build\n2. Fix errors\n```\n```watch:build\ncargo build\n```";
         let resp = parse_response(text);
-        assert_eq!(resp.next_steps, "1. Check build\n2. Fix errors");
+        assert_eq!(resp.mind, "1. Check build\n2. Fix errors");
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "build");
         assert_eq!(resp.segments[0].mode, BlockMode::Watch);
     }
 
     #[test]
-    fn test_parse_next_steps_only() {
-        let text = "Some reasoning\n\n```next-steps\nWait for user input then proceed\n```";
+    fn test_parse_mind_only() {
+        let text = "Some reasoning\n\n```mind\nWait for user input then proceed\n```";
         let resp = parse_response(text);
-        assert_eq!(resp.next_steps, "Wait for user input then proceed");
+        assert_eq!(resp.mind, "Wait for user input then proceed");
         assert!(resp.segments.is_empty());
     }
 
     #[test]
-    fn test_parse_no_next_steps() {
+    fn test_parse_no_mind() {
         let text = "```watch:build\ncargo build\n```";
         let resp = parse_response(text);
-        assert!(resp.next_steps.is_empty());
+        assert!(resp.mind.is_empty());
         assert_eq!(resp.segments.len(), 1);
     }
 
     #[test]
-    fn test_next_steps_not_in_segments() {
-        let text = "```next-steps\nmy plan\n```\n```watch:build\ncargo build\n```";
+    fn test_mind_not_in_segments() {
+        let text = "```mind\nmy plan\n```\n```watch:build\ncargo build\n```";
         let resp = parse_response(text);
-        assert_eq!(resp.next_steps, "my plan");
+        assert_eq!(resp.mind, "my plan");
         assert_eq!(resp.segments.len(), 1);
-        assert!(resp.segments.iter().all(|s| s.mode != BlockMode::NextSteps));
+        assert!(resp.segments.iter().all(|s| s.mode != BlockMode::Mind));
     }
 
     #[test]
