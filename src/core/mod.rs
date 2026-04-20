@@ -210,7 +210,7 @@ impl Server {
 
             let file_view = self
                 .back
-                .run(&block.window, &format!("cat -n {}", block.window))
+                .file(&block.window)
                 .await;
             outputs.insert(block.window.clone(), file_view);
 
@@ -258,7 +258,7 @@ impl Server {
             let output = self.back.run(path, &script).await;
             self.session.write_out(path, &output);
 
-            let file_view = self.back.run(path, &format!("cat -n {path}")).await;
+            let file_view = self.back.file(path).await;
             outputs.insert(path.clone(), file_view);
 
             move_to_end(segments, path);
@@ -278,12 +278,11 @@ impl Server {
         for block in segments {
             if block.mode == BlockMode::Watch || block.mode == BlockMode::File {
                 debug!("execute: '{}' watch", block.window);
-                let cmd = if block.mode == BlockMode::File {
-                    format!("cat -n {}", block.window)
+                let output = if block.mode == BlockMode::File {
+                    self.back.file(&block.window).await
                 } else {
-                    block.content.clone()
+                    self.back.run(&block.window, &block.content).await
                 };
-                let output = self.back.run(&block.window, &cmd).await;
                 self.session.write_out(&block.window, &output);
                 outputs.insert(block.window.clone(), output);
             }

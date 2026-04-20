@@ -11,4 +11,8 @@ pub struct CmdOutput {
 #[async_trait]
 pub trait Backend: Send + Sync {
     async fn run(&self, title: &str, command: &str) -> CmdOutput;
+
+    async fn file(&self, title: &str) -> CmdOutput {
+        self.run(title, &format!(r#"awk '{{print "L" NR ": " $0}}' "{title}""#)).await
+    }
 }

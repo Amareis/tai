@@ -7,8 +7,8 @@
 ### Запуск
 
 ```bash
-tai server          # обычный запуск
-tai server --debug  # пошаговый режим (Enter между тиками)
+tai          # обычный запуск
+tai --debug  # пошаговый режим (Enter между тиками)
 ```
 
 CLI (`src/main.rs`) через clap парсит команду `server`, читает `tai.md` как начальный ответ, парсит его через `parse_response()` и вызывает `run_server()` из `lib.rs`.

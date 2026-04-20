@@ -263,7 +263,7 @@ impl SessionDir {
     }
 
     pub fn print_banner(&self) {
-        let to_resume = format!("  tai server {}  ", self.session_path().display());
+        let to_resume = format!("  tai {}  ", self.session_path().display());
         let width = std::cmp::max(50, to_resume.chars().count());
         let border = "═".repeat(width);
         println!();
