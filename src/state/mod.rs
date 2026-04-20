@@ -32,6 +32,6 @@ impl State {
 
     #[must_use]
     pub fn is_complete(&self) -> bool {
-        self.response.complete || self.segments.is_empty()
+        self.response.complete
     }
 }

@@ -129,5 +129,3 @@ Use `mind:complete` to signal that the task is finished. This ends the session i
 Task finished successfully. All changes verified.
 ```
 ```
-
-Alternatively, closing ALL windows also ends the session.
