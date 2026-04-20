@@ -97,7 +97,7 @@ impl Server {
 
             self.session.write_tick(state.tick_n);
 
-            if state.segments.is_empty() || state.response.complete {
+            if state.is_complete() {
                 break;
             }
         }
@@ -106,6 +106,10 @@ impl Server {
     }
 
     pub async fn tick(&mut self, mut state: State) -> Result<State, CoreError> {
+        if state.is_complete() {
+            return Ok(state);
+        }
+
         state.tick_n += 1;
         let tick_n = state.tick_n;
         info!("tick #{tick_n}: start");
@@ -115,9 +119,13 @@ impl Server {
         self.update_state(&mut state).await;
 
         info!(
-            "tick #{tick_n}: state updated ({} segments), calling agent",
+            "tick #{tick_n}: state updated (now {} segments), calling agent",
             state.segments.len()
         );
+
+        if state.is_complete() {
+            return Ok(state);
+        }
 
         self.debug_wait("before agent call").await;
 
