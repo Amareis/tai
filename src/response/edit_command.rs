@@ -106,7 +106,7 @@ pub fn parse_edit_commands(content: &str) -> Result<Vec<EditCommand>, EditError>
                 return Err(EditError::Parse {
                     line: i + 1,
                     message: format!("unknown action '{action_char}' in: {line}"),
-                })
+                });
             }
         };
 
