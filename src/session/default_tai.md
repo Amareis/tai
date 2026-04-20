@@ -15,6 +15,6 @@ What we do today?
 ```mind
 Known: (none yet)
 Resolved: (none yet)
-Context: Starting fresh — waiting for task input.
-Do: Analyze the project and begin work.
+Context: Starting fresh — asked for task input.
+Do: Analyze the task window and begin work.
 ```
