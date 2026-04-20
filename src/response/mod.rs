@@ -45,9 +45,7 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                     format_args!("```{}:{}\n```\n", prefix, block.window),
                 );
             }
-            BlockMode::Watch
-            | BlockMode::Exec
-            | BlockMode::Ask => {
+            BlockMode::Watch | BlockMode::Exec | BlockMode::Ask => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
                     format_args!("```{}:{}\n{}\n```\n", prefix, block.window, block.content),
@@ -167,14 +165,15 @@ fn parse_response_segments(input: &str) -> Vec<ParsedSegment> {
             let (_body_end, close_end, content) = parse_block_body(input, header_end);
 
             if let Some(hdr) = hdr_opt
-                && (!hdr.window.is_empty() || hdr.mode == BlockMode::Mind) {
-                    segments.push(ParsedSegment::Block {
-                        window: hdr.window,
-                        mode: hdr.mode,
-                        dashboard: hdr.dashboard,
-                        content: content.trim_end().to_string(),
-                    });
-                }
+                && (!hdr.window.is_empty() || hdr.mode == BlockMode::Mind)
+            {
+                segments.push(ParsedSegment::Block {
+                    window: hdr.window,
+                    mode: hdr.mode,
+                    dashboard: hdr.dashboard,
+                    content: content.trim_end().to_string(),
+                });
+            }
 
             pos = close_end;
         } else {
@@ -261,7 +260,11 @@ fn parse_block_header(header: &str) -> Option<Header> {
         let mode_str = &header[..pos];
         let window = header[pos + 1..].to_string();
         let (mode, dashboard) = parse_mode_spec(mode_str)?;
-        return Some(Header { window, mode, dashboard });
+        return Some(Header {
+            window,
+            mode,
+            dashboard,
+        });
     }
 
     let (mode, dashboard) = parse_mode_spec(header)?;
@@ -330,11 +333,7 @@ fn extract_heredoc_delimiter(content: &str) -> Option<String> {
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
             .collect();
-        if delim.is_empty() {
-            None
-        } else {
-            Some(delim)
-        }
+        if delim.is_empty() { None } else { Some(delim) }
     }
 }
 
@@ -434,7 +433,10 @@ mod tests {
 
     #[test]
     fn test_parse_header_prefix_format() {
-        assert!(parse_block_header("build").is_none(), "no mode prefix should return None");
+        assert!(
+            parse_block_header("build").is_none(),
+            "no mode prefix should return None"
+        );
 
         let h = parse_block_header("close:build").unwrap();
         assert_eq!(h.window, "build");
@@ -706,8 +708,7 @@ mod tests {
 
     #[test]
     fn test_parse_mind_block() {
-        let text =
-            "```mind\n1. Check build\n2. Fix errors\n```\n```watch:build\ncargo build\n```";
+        let text = "```mind\n1. Check build\n2. Fix errors\n```\n```watch:build\ncargo build\n```";
         let resp = parse_response(text);
         assert_eq!(resp.mind, "1. Check build\n2. Fix errors");
         assert_eq!(resp.segments.len(), 1);
