@@ -14,11 +14,11 @@ fn assert_test_agent(server: &Server) {
         .expect("expected TestAgent").assert_all_consumed();
 }
 
-fn test_session() -> SessionDir {
+async fn test_session() -> SessionDir {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().to_path_buf();
     std::fs::write(project.join("tai.md"), "").ok();
-    SessionDir::create_new(&project, None, false).expect("session")
+    SessionDir::create_new(&project, None, false).await.expect("session")
 }
 
 fn test_server(session: SessionDir, agent: TestAgent) -> Server {
@@ -33,7 +33,7 @@ fn task(steps: &str) -> AgentResponse {
 #[tokio::test]
 #[traced_test]
 async fn tick_empty_session() {
-    let session = test_session();
+    let session = test_session().await;
     let agent = TestAgent::new().add_step(
         |_state: &State| {},
         task("done"),
@@ -49,7 +49,7 @@ async fn tick_empty_session() {
 #[tokio::test]
 #[traced_test]
 async fn tick_agent_runs_command() {
-    let session = test_session();
+    let session = test_session().await;
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -78,7 +78,7 @@ async fn tick_agent_runs_command() {
 #[tokio::test]
 #[traced_test]
 async fn close_removes_from_tracked() {
-    let session = test_session();
+    let session = test_session().await;
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -110,7 +110,7 @@ async fn close_removes_from_tracked() {
 #[tokio::test]
 #[traced_test]
 async fn exec_runs_once_then_caches() {
-    let session = test_session();
+    let session = test_session().await;
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -139,7 +139,7 @@ async fn exec_runs_once_then_caches() {
 #[tokio::test]
 #[traced_test]
 async fn upsert_replaces_existing_title() {
-    let session = test_session();
+    let session = test_session().await;
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -176,7 +176,7 @@ async fn upsert_replaces_existing_title() {
 #[tokio::test]
 #[traced_test]
 async fn write_mode_creates_file() {
-    let session = test_session();
+    let session = test_session().await;
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -206,7 +206,7 @@ async fn write_mode_creates_file() {
 #[tokio::test]
 #[traced_test]
 async fn edit_mode_modifies_file() {
-    let session = test_session();
+    let session = test_session().await;
 
     let agent = TestAgent::new()
         .add_step(
@@ -243,7 +243,7 @@ async fn edit_mode_modifies_file() {
 #[tokio::test]
 #[traced_test]
 async fn edit_mode_rejects_unknown_line() {
-    let session = test_session();
+    let session = test_session().await;
 
     let agent = TestAgent::new()
         .add_step(
@@ -280,7 +280,7 @@ async fn edit_mode_rejects_unknown_line() {
 #[tokio::test]
 #[traced_test]
 async fn file_mode_shows_file() {
-    let session = test_session();
+    let session = test_session().await;
 
     let agent = TestAgent::new()
         .add_step(
@@ -315,7 +315,7 @@ async fn file_mode_shows_file() {
 #[tokio::test]
 #[traced_test]
 async fn task_persists_and_completes() {
-    let session = test_session();
+    let session = test_session().await;
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},
@@ -347,7 +347,7 @@ async fn task_persists_and_completes() {
 #[tokio::test]
 #[traced_test]
 async fn mind_persists_across_ticks() {
-    let session = test_session();
+    let session = test_session().await;
     let agent = TestAgent::new()
         .add_step(
             |_state: &State| {},

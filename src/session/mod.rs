@@ -1,26 +1,56 @@
 use crate::agent::AgentResponse;
 use crate::backend::CmdOutput;
 use crate::response::{parse_response, serialize_blocks};
-use crate::types::ParsedBlock;
+use crate::types::{BlockMode, ParsedBlock};
+use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::info;
 use uuid::Uuid;
 
 const SYSTEM_PROMPT: &str = include_str!("system_prompt.txt");
 const DEFAULT_TAI: &str = include_str!("default_tai.md");
 
-fn initial_tai_content(project_dir: &Path, task: Option<&str>) -> String {
-    if let Some(t) = task {
-        format!(
-            "Project conventions and architecture reference.\n\
-             ```file:work/AGENTS.md\n```\n\n\
-             Current project structure.\n\
-             ```watch.dashboard:tree\ntree -l --gitignore\n```\n\n\
-             ```task\nKnown: (none yet)\nResolved: (none yet)\nContext: Starting fresh — task provided via CLI.\nDo: {t}\n```\n"
-        )
+fn initial_tai_content(project_dir: &Path) -> String {
+    std::fs::read_to_string(project_dir.join("tai.md"))
+        .unwrap_or_else(|_| DEFAULT_TAI.to_string())
+}
+
+async fn read_task_interactive() -> Option<String> {
+    let mut stdout = tokio::io::stdout();
+    stdout.write_all(b"? What we do today?\n> ").await.ok()?;
+    stdout.flush().await.ok()?;
+    let stdin = tokio::io::stdin();
+    let reader = BufReader::new(stdin);
+    let mut lines = reader.lines();
+    let line = lines.next_line().await.ok()??;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        None
     } else {
-        std::fs::read_to_string(project_dir.join("tai.md"))
-            .unwrap_or_else(|_| DEFAULT_TAI.to_string())
+        Some(trimmed.to_string())
+    }
+}
+
+async fn read_task_stdin() -> Option<String> {
+    let mut buf = String::new();
+    tokio::io::AsyncReadExt::read_to_string(&mut tokio::io::stdin(), &mut buf)
+        .await
+        .ok()?;
+    let trimmed = buf.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+async fn read_task() -> Option<String> {
+    if std::io::stdin().is_terminal() {
+        read_task_interactive().await
+    } else {
+        read_task_stdin().await
     }
 }
 
@@ -31,7 +61,11 @@ pub struct SessionDir {
 }
 
 impl SessionDir {
-    pub fn create_new(project_dir: &Path, task: Option<&str>, debug: bool) -> Result<Self, std::io::Error> {
+    pub async fn create_new(
+        project_dir: &Path,
+        task: Option<&str>,
+        debug: bool,
+    ) -> Result<Self, std::io::Error> {
         let id = generate_short_id();
         let workspace = if debug {
             project_dir.join("../../tai-prev").join(&id)
@@ -40,16 +74,16 @@ impl SessionDir {
         };
 
         let internal = workspace.join(".session");
-        std::fs::create_dir_all(internal.join("out"))?;
-        std::fs::create_dir_all(internal.join("responses"))?;
+        tokio::fs::create_dir_all(internal.join("out")).await?;
+        tokio::fs::create_dir_all(internal.join("responses")).await?;
 
         let symlink = workspace.join("work");
-        if !symlink.exists() {
-            std::os::unix::fs::symlink(project_dir, &symlink)?;
+        if !tokio::fs::try_exists(&symlink).await.unwrap_or(false) {
+            tokio::fs::symlink(project_dir, &symlink).await?;
         }
 
-        std::fs::write(internal.join("system-prompt.txt"), SYSTEM_PROMPT)?;
-        std::fs::write(internal.join("tick"), "0")?;
+        tokio::fs::write(internal.join("system-prompt.txt"), SYSTEM_PROMPT).await?;
+        tokio::fs::write(internal.join("tick"), "0").await?;
 
         let session = Self {
             workspace,
@@ -57,17 +91,27 @@ impl SessionDir {
             project: project_dir.to_path_buf(),
         };
 
-        let tai_content = initial_tai_content(project_dir, task);
-        let resp = parse_response(&tai_content);
-        session.write_tick_response(0, &resp);
+        let tai_content = initial_tai_content(project_dir);
+        let mut resp = parse_response(&tai_content);
+        if let Some(t) = task {
+            resp.task = t.to_string();
+        } else if resp.task.is_empty()
+            && let Some(t) = read_task().await {
+                resp.task = t;
+            }
+        session.write_tick_response(0, &resp).await;
 
         info!("session created: {}", session.workspace.display());
         Ok(session)
     }
 
-    pub fn open(path: &Path) -> Result<Self, std::io::Error> {
+    pub async fn open(path: &Path) -> Result<Self, std::io::Error> {
         let internal = path.join(".session");
-        if !internal.is_dir() {
+        if !tokio::fs::metadata(&internal)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("not a session directory: {}", path.display()),
@@ -75,8 +119,12 @@ impl SessionDir {
         }
 
         let symlink = path.join("work");
-        let project = if symlink.is_symlink() {
-            std::fs::read_link(&symlink)?
+        let project = if tokio::fs::symlink_metadata(&symlink)
+            .await
+            .map(|m| m.is_symlink())
+            .unwrap_or(false)
+        {
+            tokio::fs::read_link(&symlink).await?
         } else {
             std::env::current_dir()?
         };
@@ -89,81 +137,91 @@ impl SessionDir {
         })
     }
 
-    pub fn create_or_open(
+    pub async fn create_or_open(
         path: Option<&Path>,
         project_dir: &Path,
         task: Option<&str>,
         debug: bool,
     ) -> Result<Self, std::io::Error> {
         match path {
-            Some(p) if p.join(".session").is_dir() => Self::open(p),
+            Some(p)
+                if tokio::fs::metadata(p.join(".session"))
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false) =>
+            {
+                Self::open(p).await
+            }
             Some(p) => {
                 let session = Self {
                     workspace: p.to_path_buf(),
                     internal: p.join(".session"),
                     project: project_dir.to_path_buf(),
                 };
-                std::fs::create_dir_all(session.internal.join("out"))?;
-                std::fs::create_dir_all(session.internal.join("responses"))?;
+                tokio::fs::create_dir_all(session.internal.join("out")).await?;
+                tokio::fs::create_dir_all(session.internal.join("responses")).await?;
                 let symlink = session.workspace.join("work");
-                if !symlink.exists() {
-                    std::os::unix::fs::symlink(project_dir, &symlink)?;
+                if !tokio::fs::try_exists(&symlink).await.unwrap_or(false) {
+                    tokio::fs::symlink(project_dir, &symlink).await?;
                 }
-                std::fs::write(session.internal.join("system-prompt.txt"), SYSTEM_PROMPT)?;
-                std::fs::write(session.internal.join("tick"), "0")?;
-                let tai_content = initial_tai_content(project_dir, task);
-                let resp = parse_response(&tai_content);
-                session.write_tick_response(0, &resp);
+                tokio::fs::write(session.internal.join("system-prompt.txt"), SYSTEM_PROMPT)
+                    .await?;
+                tokio::fs::write(session.internal.join("tick"), "0").await?;
+                let tai_content = initial_tai_content(project_dir);
+                let mut resp = parse_response(&tai_content);
+                if let Some(t) = task {
+                    resp.task = t.to_string();
+                } else if resp.task.is_empty()
+                    && let Some(t) = read_task().await {
+                        resp.task = t;
+                    }
+                session.write_tick_response(0, &resp).await;
                 info!("session created at: {}", p.display());
                 Ok(session)
             }
-            None => Self::create_new(project_dir, task, debug),
+            None => Self::create_new(project_dir, task, debug).await,
         }
     }
 
-    #[must_use]
-    pub fn read_index(&self) -> Vec<ParsedBlock> {
+    pub async fn read_index(&self) -> Vec<ParsedBlock> {
         let path = self.internal.join("index.md");
-        match std::fs::read_to_string(&path) {
+        match tokio::fs::read_to_string(&path).await {
             Ok(text) => parse_response(&text).segments,
             Err(_) => Vec::new(),
         }
     }
 
-    pub fn write_index(&self, segments: &[ParsedBlock]) {
+    pub async fn write_index(&self, segments: &[ParsedBlock]) {
         let text = serialize_blocks(segments);
         let path = self.internal.join("index.md");
-        std::fs::write(&path, text).ok();
+        tokio::fs::write(&path, text).await.ok();
     }
 
-    #[must_use]
-    pub fn read_out(&self, title: &str) -> Option<CmdOutput> {
+    pub async fn read_out(&self, title: &str) -> Option<CmdOutput> {
         let path = self.internal.join("out").join(format!("{title}.out"));
-        let raw = std::fs::read_to_string(&path).ok()?;
+        let raw = tokio::fs::read_to_string(&path).await.ok()?;
         let (exit_code, stdout) = parse_out_file(&raw);
         Some(CmdOutput { exit_code, stdout })
     }
 
-    pub fn write_out(&self, title: &str, output: &CmdOutput) {
+    pub async fn write_out(&self, title: &str, output: &CmdOutput) {
         let path = self.internal.join("out").join(format!("{title}.out"));
         let content = format!("exit {}\n{}", output.exit_code, output.stdout);
-        std::fs::write(&path, content).ok();
+        tokio::fs::write(&path, content).await.ok();
     }
 
-    pub fn remove_out(&self, title: &str) {
+    pub async fn remove_out(&self, title: &str) {
         let path = self.internal.join("out").join(format!("{title}.out"));
-        std::fs::remove_file(&path).ok();
+        tokio::fs::remove_file(&path).await.ok();
     }
 
     #[must_use]
-    pub fn has_out(&self, title: &str) -> bool {
-        self.internal
-            .join("out")
-            .join(format!("{title}.out"))
-            .exists()
+    pub async fn has_out(&self, title: &str) -> bool {
+        tokio::fs::try_exists(self.internal.join("out").join(format!("{title}.out")))
+            .await
+            .unwrap_or(false)
     }
 
-    #[must_use]
     pub async fn read_tick(&self, default: u64) -> u64 {
         let path = self.internal.join("tick");
         tokio::fs::read_to_string(&path)
@@ -173,12 +231,11 @@ impl SessionDir {
             .unwrap_or(default)
     }
 
-    pub fn write_tick(&self, n: u64) {
+    pub async fn write_tick(&self, n: u64) {
         let path = self.internal.join("tick");
-        std::fs::write(&path, n.to_string()).ok();
+        tokio::fs::write(&path, n.to_string()).await.ok();
     }
 
-    #[must_use]
     pub async fn read_system_prompt(&self) -> String {
         let path = self.internal.join("system-prompt.txt");
         tokio::fs::read_to_string(&path)
@@ -201,62 +258,59 @@ impl SessionDir {
         &self.project
     }
 
-    #[must_use]
-    pub fn read_all_outputs(
+    pub async fn read_all_outputs(
         &self,
         segments: &[ParsedBlock],
-    ) -> std::collections::HashMap<String, CmdOutput> {
-        let mut outputs = std::collections::HashMap::new();
+    ) -> HashMap<String, CmdOutput> {
+        let mut outputs = HashMap::new();
         for block in segments {
-            if block.mode == crate::types::BlockMode::Close {
+            if block.mode == BlockMode::Close {
                 continue;
             }
-            if let Some(output) = self.read_out(&block.window) {
+            if let Some(output) = self.read_out(&block.window).await {
                 outputs.insert(block.window.clone(), output);
             }
         }
         outputs
     }
 
-    #[must_use]
-    pub fn read_mind(&self) -> String {
+    pub async fn read_mind(&self) -> String {
         let path = self.internal.join("mind.md");
-        std::fs::read_to_string(&path).unwrap_or_default()
+        tokio::fs::read_to_string(&path).await.unwrap_or_default()
     }
 
-    pub fn write_mind(&self, steps: &str) {
+    pub async fn write_mind(&self, steps: &str) {
         let path = self.internal.join("mind.md");
-        std::fs::write(&path, steps).ok();
+        tokio::fs::write(&path, steps).await.ok();
     }
 
-    pub fn write_tick_response(&self, tick_n: u64, response: &AgentResponse) {
+    pub async fn write_tick_response(&self, tick_n: u64, response: &AgentResponse) {
         let dir = self.internal.join("responses");
-        std::fs::create_dir_all(&dir).ok();
+        tokio::fs::create_dir_all(&dir).await.ok();
         let path = dir.join(format!("{tick_n:->5}.toml"));
-        std::fs::write(
+        tokio::fs::write(
             &path,
             toml::to_string(response).unwrap_or_else(|e| e.to_string()),
         )
+        .await
         .ok();
     }
 
-    #[must_use]
-    pub fn read_tick_response(&self, tick_n: u64) -> Option<AgentResponse> {
+    pub async fn read_tick_response(&self, tick_n: u64) -> Option<AgentResponse> {
         let path = self
             .internal
             .join("responses")
             .join(format!("{tick_n:->5}.toml"));
-        toml::from_str(&std::fs::read_to_string(path).ok()?).ok()
+        toml::from_str(&tokio::fs::read_to_string(path).await.ok()?).ok()
     }
 
-    #[must_use]
-    pub fn read_response_history(&self, from_tick: u64) -> Vec<(u64, AgentResponse)> {
+    pub async fn read_response_history(&self, from_tick: u64) -> Vec<(u64, AgentResponse)> {
         let dir = self.internal.join("responses");
         let mut result = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+        let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
             return result;
         };
-        for entry in entries.flatten() {
+        while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
             let tick: u64 = match name_str.strip_suffix(".toml").and_then(|s| s.parse().ok()) {
@@ -266,7 +320,7 @@ impl SessionDir {
             if tick < from_tick {
                 continue;
             }
-            if let Ok(content) = std::fs::read_to_string(entry.path())
+            if let Ok(content) = tokio::fs::read_to_string(entry.path()).await
                 && let Ok(resp) = toml::from_str::<AgentResponse>(&content)
             {
                 result.push((tick, resp));

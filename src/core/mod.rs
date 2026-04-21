@@ -49,13 +49,15 @@ impl Server {
         info!("run: starting server");
 
         let mut state = {
-            let segments = self.session.read_index();
-            let outputs = self.session.read_all_outputs(&segments);
+            let segments = self.session.read_index().await;
+            let outputs = self.session.read_all_outputs(&segments).await;
             let system = self.session.read_system_prompt().await;
             let tick = self.session.read_tick(0).await;
-            let response = self.session.read_tick_response(tick).unwrap_or_default();
+            let response = self.session.read_tick_response(tick).await.unwrap_or_default();
 
-            State::build(system, segments, outputs, tick, response)
+            let mut state = State::build(system, segments, outputs, tick, response);
+            state.task = state.response.task.clone();
+            state
         };
 
         info!(
@@ -97,11 +99,11 @@ impl Server {
             }
 
             self.session
-                .write_tick_response(state.tick_n, &state.response);
+                .write_tick_response(state.tick_n, &state.response).await;
 
-            self.session.write_index(&state.segments);
+            self.session.write_index(&state.segments).await;
 
-            self.session.write_tick(state.tick_n);
+            self.session.write_tick(state.tick_n).await;
 
             if state.is_complete() {
                 if !last_task.is_empty() {
@@ -183,7 +185,7 @@ impl Server {
         }
 
         for block in &close_blocks {
-            self.session.remove_out(&block.window);
+            self.session.remove_out(&block.window).await;
             outputs.remove(&block.window);
             segments.retain(|s| s.window != block.window);
         }
@@ -195,7 +197,7 @@ impl Server {
                 exit_code: 0,
                 stdout: answer,
             };
-            self.session.write_out(&block.window, &output);
+            self.session.write_out(&block.window, &output).await;
             outputs.insert(block.window.clone(), output);
             upsert_segment(segments, (*block).clone());
         }
@@ -203,13 +205,13 @@ impl Server {
         for block in &exec_blocks {
             debug!("execute: '{}' exec", block.window);
             let output = self.back.run(&block.window, &block.content).await;
-            self.session.write_out(&block.window, &output);
+            self.session.write_out(&block.window, &output).await;
             outputs.insert(block.window.clone(), output);
             upsert_segment(segments, (*block).clone());
         }
 
         for block in &write_blocks {
-            self.session.remove_out(&block.window);
+            self.session.remove_out(&block.window).await;
             outputs.remove(&block.window);
             debug!("execute: '{}' write", block.window);
             let cmd = format!(
@@ -217,7 +219,7 @@ impl Server {
                 block.window, block.content
             );
             let output = self.back.run(&block.window, &cmd).await;
-            self.session.write_out(&block.window, &output);
+            self.session.write_out(&block.window, &output).await;
 
             let file_view = self
                 .back
@@ -240,7 +242,7 @@ impl Server {
 
         for (path, blocks) in &edit_groups {
             let prev_output = outputs.get(path).cloned();
-            self.session.remove_out(path);
+            self.session.remove_out(path).await;
             outputs.remove(path);
 
             let mut all_commands = Vec::new();
@@ -270,7 +272,7 @@ impl Server {
                     exit_code: 1,
                     stdout: format!("edit error: {e}"),
                 };
-                self.session.write_out(path, &output);
+                self.session.write_out(path, &output).await;
                 outputs.insert(path.clone(), output);
                 continue;
             }
@@ -284,7 +286,7 @@ impl Server {
             debug!("execute: '{}' edit script: {}", path, script);
 
             let output = self.back.run(path, &script).await;
-            self.session.write_out(path, &output);
+            self.session.write_out(path, &output).await;
 
             let file_view = self.back.file(path).await;
             outputs.insert(path.clone(), file_view);
@@ -311,7 +313,7 @@ impl Server {
                 } else {
                     self.back.run(&block.window, &block.content).await
                 };
-                self.session.write_out(&block.window, &output);
+                self.session.write_out(&block.window, &output).await;
                 outputs.insert(block.window.clone(), output);
             }
         }

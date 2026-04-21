@@ -7,14 +7,3 @@ Current project structure.
 ```watch.dashboard:tree
 tree -l --gitignore
 ```
-
-```ask.dashboard:task
-What we do today?
-```
-
-```task
-Known: (none yet)
-Resolved: (none yet)
-Context: Starting fresh — asked for task input.
-Do: Analyze the task window and begin work.
-```

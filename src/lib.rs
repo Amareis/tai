@@ -33,7 +33,7 @@ pub async fn run_server(
         .init();
 
     let project_dir = env::current_dir()?;
-    let session = SessionDir::create_or_open(session_path, &project_dir, task, debug)?;
+    let session = SessionDir::create_or_open(session_path, &project_dir, task, debug).await?;
 
     let model = env::var("OPENAI_MODEL")?;
     let mut agent = Box::new(LlmAgent::new(model));
