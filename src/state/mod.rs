@@ -1,4 +1,3 @@
-use crate::agent::AgentResponse;
 use crate::backend::CmdOutput;
 use crate::types::ParsedBlock;
 use std::collections::HashMap;
@@ -9,8 +8,8 @@ pub struct State {
     pub segments: Vec<ParsedBlock>,
     pub outputs: HashMap<String, CmdOutput>,
     pub tick_n: u64,
-    pub response: AgentResponse,
     pub task: String,
+    pub is_completed: bool,
 }
 
 impl State {
@@ -20,20 +19,19 @@ impl State {
         segments: Vec<ParsedBlock>,
         outputs: HashMap<String, CmdOutput>,
         tick_n: u64,
-        response: AgentResponse,
     ) -> Self {
         Self {
             system,
             segments,
             outputs,
             tick_n,
-            response,
             task: String::new(),
+            is_completed: false,
         }
     }
 
     #[must_use]
     pub fn is_complete(&self) -> bool {
-        self.response.complete
+        self.is_completed
     }
 }

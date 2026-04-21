@@ -1,4 +1,4 @@
-use crate::agent::Agent;
+use crate::agent::{Agent, AgentResponse};
 use crate::backend::Backend;
 use crate::response::edit_command;
 use crate::session::SessionDir;
@@ -32,11 +32,7 @@ pub struct Server {
 
 impl Server {
     #[must_use]
-    pub fn new(
-        session: SessionDir,
-        back: Box<dyn Backend>,
-        agent: Box<dyn Agent>,
-    ) -> Self {
+    pub fn new(session: SessionDir, back: Box<dyn Backend>, agent: Box<dyn Agent>) -> Self {
         Self {
             session,
             back,
@@ -48,16 +44,20 @@ impl Server {
     pub async fn run(&mut self) -> Result<(), CoreError> {
         info!("run: starting server");
 
-        let mut state = {
+        let (mut state, mut response) = {
             let segments = self.session.read_index().await;
             let outputs = self.session.read_all_outputs(&segments).await;
             let system = self.session.read_system_prompt().await;
             let tick = self.session.read_tick(0).await;
-            let response = self.session.read_tick_response(tick).await.unwrap_or_default();
+            let response = self
+                .session
+                .read_tick_response(tick)
+                .await
+                .unwrap_or_default();
 
-            let mut state = State::build(system, segments, outputs, tick, response);
-            state.task = state.response.task.clone();
-            state
+            let mut state = State::build(system, segments, outputs, tick);
+            state.task.clone_from(&response.task);
+            (state, response)
         };
 
         info!(
@@ -65,12 +65,11 @@ impl Server {
             state.segments.len()
         );
 
-        let mut last_task = String::new();
         loop {
             state.system = self.session.read_system_prompt().await;
 
             let result = {
-                let tick_fut = self.tick(&mut state);
+                let tick_fut = self.tick_tack(&mut state, response);
                 tokio::pin!(tick_fut);
 
                 tokio::select! {
@@ -82,35 +81,37 @@ impl Server {
                 }
             };
 
-            // Persist state even if tick errored, since update_state may have already applied side effects
-            self.session
-                .write_tick_response(state.tick_n, &state.response).await;
-            self.session.write_index(&state.segments).await;
-            self.session.write_tick(state.tick_n).await;
-
             match result {
                 Err(e) => {
+                    // Persist state since update_state already applied side effects
+                    self.session.write_index(&state.segments).await;
+                    self.session.write_tick(state.tick_n).await;
                     if !matches!(e, CoreError::Interrupted) {
                         warn!("tick error: {}", e);
                     }
-                    if !last_task.is_empty() {
-                        println!("\n{last_task}");
+                    if !state.task.is_empty() {
+                        println!("\n{}", state.task);
                     }
                     return Err(e);
                 }
-                Ok(()) => {
-                    last_task = state.task.clone();
+                Ok(None) => {
+                    // Session completed
+                    self.session.write_index(&state.segments).await;
+                    self.session.write_tick(state.tick_n).await;
+                    if !state.task.is_empty() {
+                        println!("\n{}", state.task);
+                    }
+                    break;
+                }
+                Ok(Some(new_response)) => {
+                    response = new_response;
+                    self.session.write_tick_response(state.tick_n, &response).await;
+                    self.session.write_index(&state.segments).await;
+                    self.session.write_tick(state.tick_n).await;
                 }
             }
 
             if self.debug {
-                break;
-            }
-
-            if state.is_complete() {
-                if !last_task.is_empty() {
-                    println!("\n{last_task}");
-                }
                 break;
             }
         }
@@ -119,25 +120,23 @@ impl Server {
         Ok(())
     }
 
-    pub async fn tick(&mut self, state: &mut State) -> Result<(), CoreError> {
-        if state.is_complete() {
-            return Ok(());
-        }
+    pub async fn tick_tack(
+        &mut self,
+        state: &mut State,
+        resp: AgentResponse,
+    ) -> Result<Option<AgentResponse>, CoreError> {
+        let completed = self.update_state(state, resp).await;
 
-        state.tick_n += 1;
         let tick_n = state.tick_n;
-        info!("tick #{tick_n}: start");
-
-        self.update_state(state).await;
+        if completed {
+            info!("tick #{tick_n}: state completed");
+            return Ok(None);
+        }
 
         info!(
             "tick #{tick_n}: state updated (now {} segments), calling agent",
             state.segments.len()
         );
-
-        if state.is_complete() {
-            return Ok(());
-        }
 
         let response = self.agent.step(state).await?;
         info!(
@@ -146,21 +145,25 @@ impl Server {
             response.task.len()
         );
 
-        state.task.clone_from(&response.task);
-        state.response = response;
-
         info!("tick #{tick_n}: done");
-        Ok(())
+        Ok(Some(response))
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn update_state(&self, state: &mut State) {
+    async fn update_state(&self, state: &mut State, response: AgentResponse) -> bool {
+        if state.is_complete() {
+            return true;
+        }
+
+        state.tick_n += 1;
+        state.task.clone_from(&response.task);
+
         let State {
-            response,
-            outputs,
-            segments,
-            ..
+            outputs, segments, tick_n, ..
         } = state;
+
+        info!("tick #{tick_n}: start");
+
         let mut close_blocks: Vec<&ParsedBlock> = Vec::new();
         let mut ask_blocks: Vec<&ParsedBlock> = Vec::new();
         let mut exec_blocks: Vec<&ParsedBlock> = Vec::new();
@@ -219,10 +222,7 @@ impl Server {
             let output = self.back.run(&block.window, &cmd).await;
             self.session.write_out(&block.window, &output).await;
 
-            let file_view = self
-                .back
-                .file(&block.window)
-                .await;
+            let file_view = self.back.file(&block.window).await;
             outputs.insert(block.window.clone(), file_view);
 
             move_to_end(segments, &block.window);
@@ -256,10 +256,12 @@ impl Server {
                         break;
                     }
                     if let Some(ref out) = prev_output
-                        && let Err(e) = edit_command::validate_texts_against_output(cmds, &out.stdout) {
-                            edit_err = Some(e);
-                            break;
-                        }
+                        && let Err(e) =
+                        edit_command::validate_texts_against_output(cmds, &out.stdout)
+                    {
+                        edit_err = Some(e);
+                        break;
+                    }
                     all_commands.extend(cmds.iter().cloned());
                 }
             }
@@ -315,8 +317,10 @@ impl Server {
                 outputs.insert(block.window.clone(), output);
             }
         }
-    }
 
+        state.is_completed = response.complete;
+        state.is_completed
+    }
 }
 
 fn upsert_segment(segments: &mut Vec<ParsedBlock>, block: ParsedBlock) {

@@ -41,7 +41,7 @@ async fn tick_empty_session() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -68,9 +68,10 @@ async fn tick_agent_runs_command() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
+    let mut resp = AgentResponse::new();
+    resp = server.tick_tack(&mut state, resp).await.unwrap();
     assert_eq!(state.segments.len(), 0);
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, resp).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -97,11 +98,11 @@ async fn close_removes_from_tracked() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert_eq!(state.segments.len(), 0);
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert_eq!(state.segments.len(), 1);
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert_eq!(state.segments.len(), 0);
 
     assert_test_agent(&server);
@@ -129,9 +130,9 @@ async fn exec_runs_once_then_caches() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert_eq!(state.segments.len(), 0);
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -164,11 +165,11 @@ async fn upsert_replaces_existing_title() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert_eq!(state.segments.len(), 0);
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert_eq!(state.segments.len(), 1);
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -196,9 +197,9 @@ async fn write_mode_creates_file() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert_eq!(state.segments.len(), 0);
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -233,9 +234,9 @@ async fn edit_mode_modifies_file() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
-    server.tick(&mut state).await.unwrap();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -270,9 +271,9 @@ async fn edit_mode_rejects_unknown_line() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
-    server.tick(&mut state).await.unwrap();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -305,9 +306,9 @@ async fn file_mode_shows_file() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
-    server.tick(&mut state).await.unwrap();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
 
     assert_test_agent(&server);
 }
@@ -335,9 +336,9 @@ async fn task_persists_and_completes() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert_eq!(state.task, "check build");
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert!(state.is_complete());
     assert_eq!(state.task, "build ok");
 
@@ -364,9 +365,9 @@ async fn mind_persists_across_ticks() {
 
     let mut server = test_server(session, agent);
     let mut state = State::default();
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
     assert_eq!(state.task, "step 1: check build");
-    server.tick(&mut state).await.unwrap();
+    server.tick_tack(&mut state, AgentResponse::new()).await.unwrap();
 
     assert_test_agent(&server);
 }
