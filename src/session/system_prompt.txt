@@ -88,7 +88,7 @@ The content goes between `<<'TAIDELIM'` and `TAIDELIM`. This is **mandatory** â€
 
 ## Editing Files
 
-Edit commands use a structured format where each command starts with an **ActionWord**, followed by line references that include the **full line text** (as shown by `file` output).
+Edit commands use a structured format. The header line is `ActionWord Exactly L<n>:text` for a single line, or `ActionWord Start L<n>:text` followed by a second line `End L<m>:text` for a range. Content follows on subsequent lines until a lone `.`
 
 ### Actions
 
@@ -108,16 +108,21 @@ Edit commands use a structured format where each command starts with an **Action
 
 ### Command format
 
+**Single line:**
 ```
-ActionWord
-L<n>:line text
-[L<m>:line text or L<m>;]   (optional range end)
+ActionWord Exactly L<n>:line text
 [content lines]
 .
 ```
 
-- **Single-line actions**: provide one line reference, then content (if needed), then `.`
-- **Range actions**: provide two line references (start and end), then content (if needed), then `.`
+**Range:**
+```
+ActionWord Start L<n>:line text
+End L<m>:line text
+[content lines]
+.
+```
+
 - **Delete**: no content or dot needed
 
 Commands are automatically sorted **bottom-to-top** before execution, so you can write them in any order without worrying about line number shifts from earlier edits.
@@ -128,8 +133,7 @@ Replace a single line:
 ```
 ```edit:src/main.rs
 <<'TAI'
-Change
-L5:old_function()
+Change Exactly L5:old_function()
 fn new_function() {
     println!("updated");
 }
@@ -142,9 +146,8 @@ Replace a range that ends with an empty line:
 ```
 ```edit:src/main.rs
 <<'TAI'
-Change
-L1:use some::mod;
-L2;
+Change Start L1:use some::mod;
+End L2;
 use some::mod::{self, SomeImport};
 use some::new::mod;
 
@@ -157,8 +160,7 @@ Delete a line:
 ```
 ```edit:src/main.rs
 <<'TAI'
-Delete
-L10:    unused_call();
+Delete Exactly L10:    unused_call();
 TAI
 ```
 ```
@@ -167,8 +169,7 @@ Append after a line:
 ```
 ```edit:src/main.rs
 <<'TAI'
-AppendAfter
-L5:pub fn main() {
+AppendAfter Exactly L5:pub fn main() {
     some_helper();
 .
 TAI

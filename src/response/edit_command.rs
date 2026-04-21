@@ -124,15 +124,14 @@ impl EditCommand {
 
 /// Parse edit commands in the new format:
 /// ```text
-/// ActionWord
-/// L<n>:line text
-/// [L<n>:line text]   (optional range end)
+/// ActionWord L<n>:line text [To L<n>:line text]
 /// [content lines]
 /// .
 /// ```
 ///
 /// `ActionWord` is one of: Change, Delete, `InsertBefore`, `AppendAfter`.
 /// Line references are `L<n>:text` or `$:text`.
+/// Optional range end is written as `To L<n>:text` or `To $:text` on the same line.
 /// For Change/InsertBefore/AppendAfter, content follows until a lone `.` line.
 /// Delete has no content section.
 ///
@@ -158,21 +157,37 @@ pub fn parse_edit_commands(
         }
 
         let action = parse_action_word(line, i + 1)?;
+        let rest = line[action.as_str().len()..].trim_start();
         i += 1;
 
-        let (start, start_text) = parse_line_ref_with_text(lines.get(i).copied(), i + 1)?;
-        i += 1;
-
-        let mut end = None;
-        let mut end_text: Option<String> = None;
-        if let Some(ref_line) = lines.get(i)
-            && looks_like_line_ref(ref_line)
-        {
-            let (end_ref, text) = parse_line_ref_with_text(Some(ref_line), i + 1)?;
-            end = Some(end_ref);
-            end_text = Some(text);
+        let (start, start_text, end, end_text) = if rest.starts_with("Exactly ") {
+            let ref_part = rest.strip_prefix("Exactly ").ok_or_else(|| EditError::Parse {
+                line: i,
+                message: format!("expected 'Exactly L<n>:text', got: {rest}"),
+            })?;
+            let (s, st) = parse_line_ref_with_text(Some(ref_part), i)?;
+            (s, st, None, None)
+        } else if rest.starts_with("Start ") {
+            let ref_part = rest.strip_prefix("Start ").ok_or_else(|| EditError::Parse {
+                line: i,
+                message: format!("expected 'Start L<n>:text', got: {rest}"),
+            })?;
+            let (s, st) = parse_line_ref_with_text(Some(ref_part), i)?;
+            let end_line = lines.get(i).ok_or_else(|| EditError::Parse {
+                line: i + 1,
+                message: "expected 'End L<m>:text' after Start line".to_string(),
+            })?;
+            let end_ref_part = end_line.trim_start().strip_prefix("End ").ok_or_else(|| EditError::Parse {
+                line: i + 1,
+                message: format!("expected 'End L<m>:text', got: {end_line}"),
+            })?;
+            let (e, et) = parse_line_ref_with_text(Some(end_ref_part), i + 1)?;
             i += 1;
-        }
+            (s, st, Some(e), Some(et))
+        } else {
+            let (s, st) = parse_line_ref_with_text(Some(rest), i)?;
+            (s, st, None, None)
+        };
 
         let mut cmd_content = String::new();
         if action != EditAction::Delete {
@@ -212,7 +227,8 @@ pub fn parse_edit_commands(
 }
 
 fn parse_action_word(line: &str, line_num: usize) -> Result<EditAction, EditError> {
-    match line.trim() {
+    let word = line.split_whitespace().next().unwrap_or(line.trim());
+    match word {
         "Change" => Ok(EditAction::Change),
         "Delete" => Ok(EditAction::Delete),
         "InsertBefore" => Ok(EditAction::InsertBefore),
@@ -223,21 +239,6 @@ fn parse_action_word(line: &str, line_num: usize) -> Result<EditAction, EditErro
                 "expected action word (Change/Delete/InsertBefore/AppendAfter) in: {other}"
             ),
         }),
-    }
-}
-
-/// Check if a line looks like a line reference: `L<n>:...` or `$:...`
-fn looks_like_line_ref(line: &str) -> bool {
-    let trimmed = line.trim();
-    if let Some(rest) = trimmed.strip_prefix('L') {
-        let delim_pos = rest.find([':', ';']);
-        let Some(pos) = delim_pos else { return false };
-        let num_part = &rest[..pos];
-        !num_part.is_empty() && num_part.chars().all(|c| c.is_ascii_digit())
-    } else if let Some(rest) = trimmed.strip_prefix('$') {
-        rest.starts_with(':') || rest.starts_with(';')
-    } else {
-        false
     }
 }
 
@@ -380,11 +381,13 @@ pub fn serialize_edit_commands(commands: &[EditCommand]) -> String {
     let mut text = String::new();
     for cmd in commands {
         text.push_str(cmd.action.as_str());
-        text.push('\n');
+        text.push(' ');
         write_line_ref(&mut text, &cmd.start, cmd.start_text.as_deref());
         if let Some(end) = &cmd.end {
+            text.push_str(" To ");
             write_line_ref(&mut text, end, cmd.end_text.as_deref());
         }
+        text.push('\n');
         if cmd.action != EditAction::Delete {
             if !cmd.content.is_empty() {
                 text.push_str(&cmd.content);
@@ -400,11 +403,10 @@ fn write_line_ref(text: &mut String, line_ref: &LineRef, line_text: Option<&str>
     let _ = std::fmt::Write::write_fmt(text, format_args!("{line_ref}"));
     let t = line_text.unwrap_or("");
     if t.is_empty() {
-        text.push_str(";\n");
+        text.push(';');
     } else {
         text.push(':');
         text.push_str(t);
-        text.push('\n');
     }
 }
 
@@ -447,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_parse_change_single() {
-        let cmds = parse_edit_commands("Change\nL5:old line\nnew line\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L5:old line\nnew line\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start, LineRef::Num(5));
         assert_eq!(cmds[0].end, None);
@@ -459,7 +461,7 @@ mod tests {
     #[test]
     fn test_parse_change_range() {
         let cmds =
-            parse_edit_commands("Change\nL10:old start\nL15:old end\nfn new() {}", None).unwrap();
+            parse_edit_commands("Change Start L10:old start\nEnd L15:old end\nfn new() {}", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start, LineRef::Num(10));
         assert_eq!(cmds[0].end, Some(LineRef::Num(15)));
@@ -469,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_parse_delete() {
-        let cmds = parse_edit_commands("Delete\nL5:line to delete", None).unwrap();
+        let cmds = parse_edit_commands("Delete Exactly L5:line to delete", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].action, EditAction::Delete);
         assert_eq!(cmds[0].content, "");
@@ -478,7 +480,7 @@ mod tests {
 
     #[test]
     fn test_parse_delete_range() {
-        let cmds = parse_edit_commands("Delete\nL10:first line\nL15:last line", None).unwrap();
+        let cmds = parse_edit_commands("Delete Start L10:first line\nEnd L15:last line", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start, LineRef::Num(10));
         assert_eq!(cmds[0].end, Some(LineRef::Num(15)));
@@ -488,7 +490,7 @@ mod tests {
     #[test]
     fn test_parse_insert() {
         let cmds =
-            parse_edit_commands("InsertBefore\nL5:existing line\ninserted line\n.", None).unwrap();
+            parse_edit_commands("InsertBefore Exactly L5:existing line\ninserted line\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].action, EditAction::InsertBefore);
         assert_eq!(cmds[0].content, "inserted line");
@@ -497,7 +499,7 @@ mod tests {
     #[test]
     fn test_parse_append() {
         let cmds =
-            parse_edit_commands("AppendAfter\nL5:existing line\nappended line\n.", None).unwrap();
+            parse_edit_commands("AppendAfter Exactly L5:existing line\nappended line\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].action, EditAction::AppendAfter);
         assert_eq!(cmds[0].content, "appended line");
@@ -505,7 +507,7 @@ mod tests {
 
     #[test]
     fn test_parse_dollar_append() {
-        let cmds = parse_edit_commands("AppendAfter\n$:last line\nat the end\n.", None).unwrap();
+        let cmds = parse_edit_commands("AppendAfter Exactly $:last line\nat the end\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start, LineRef::Last);
         assert_eq!(cmds[0].end, None);
@@ -514,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_parse_dollar_change() {
-        let cmds = parse_edit_commands("Change\n$:old last line\nnew last line\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Exactly $:old last line\nnew last line\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start, LineRef::Last);
         assert_eq!(cmds[0].end, None);
@@ -524,7 +526,7 @@ mod tests {
     #[test]
     fn test_parse_multiple_non_overlapping() {
         let cmds = parse_edit_commands(
-            "Change\nL5:old five\nnew five\n.\nDelete\nL10:line ten\nChange\nL20:old twenty\nL25:old end\nnew block\n.",
+            "Change Exactly L5:old five\nnew five\n.\nDelete L10:line ten\nChange L20:old twenty To L25:old end\nnew block\n.",
             None,
         )
         .unwrap();
@@ -534,7 +536,7 @@ mod tests {
     #[test]
     fn test_parse_overlapping_fails() {
         let result = parse_edit_commands(
-            "Change\nL5:start five\nL10:end five\nnew\n.\nChange\nL8:start eight\nL12:end eight\nother\n.",
+            "Change Start L5:start five\nEnd L10:end five\nnew\n.\nChange Start L8:start eight\nEnd L12:end eight\nother\n.",
             None,
         );
         assert!(result.is_err());
@@ -547,7 +549,7 @@ mod tests {
     #[test]
     fn test_sort_bottom_up() {
         let mut cmds = parse_edit_commands(
-            "Change\nL5:old five\nnew\n.\nChange\nL10:old ten\nL15:old end\nnewer\n.\nDelete\nL3:line three",
+            "Change Exactly L5:old five\nnew\n.\nChange L10:old ten To L15:old end\nnewer\n.\nDelete L3:line three",
             None,
         )
         .unwrap();
@@ -560,7 +562,7 @@ mod tests {
     #[test]
     fn test_build_ex_script() {
         let mut cmds = parse_edit_commands(
-            "Change\nL10:old ten\nL15:old end\nfn new() {}\n.\nDelete\nL5:old five",
+            "Change Start L10:old ten\nEnd L15:old end\nfn new() {}\n.\nDelete Exactly L5:old five",
             None,
         )
         .unwrap();
@@ -577,7 +579,7 @@ mod tests {
     #[test]
     fn test_multiline_content() {
         let cmds = parse_edit_commands(
-            "Change\nL5:old five\nline one\nline two\nline three\n.",
+            "Change Exactly L5:old five\nline one\nline two\nline three\n.",
             None,
         )
         .unwrap();
@@ -588,7 +590,7 @@ mod tests {
     #[test]
     fn test_validate_line_text_ok() {
         let file = "first\nsecond\nthird\nfourth\nfifth\n";
-        let cmds = parse_edit_commands("Change\nL2:second\nreplaced\n.", Some(file)).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L2:second\nreplaced\n.", Some(file)).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start_text.as_deref(), Some("second"));
     }
@@ -596,7 +598,7 @@ mod tests {
     #[test]
     fn test_validate_line_text_mismatch() {
         let file = "first\nsecond\nthird\n";
-        let result = parse_edit_commands("Change\nL2:wrong text\nreplaced\n.", Some(file));
+        let result = parse_edit_commands("Change Exactly L2:wrong text\nreplaced\n.", Some(file));
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -608,14 +610,14 @@ mod tests {
     fn test_validate_line_text_end_range() {
         let file = "line1\nline2\nline3\nline4\nline5\n";
         let cmds =
-            parse_edit_commands("Change\nL2:line2\nL4:line4\nnew block\n.", Some(file)).unwrap();
+            parse_edit_commands("Change Start L2:line2\nEnd L4:line4\nnew block\n.", Some(file)).unwrap();
         assert_eq!(cmds[0].end_text.as_deref(), Some("line4"));
     }
 
     #[test]
     fn test_validate_line_text_end_mismatch() {
         let file = "line1\nline2\nline3\nline4\nline5\n";
-        let result = parse_edit_commands("Change\nL2:line2\nL4:wrong\nnew\n.", Some(file));
+        let result = parse_edit_commands("Change Start L2:line2\nEnd L4:wrong\nnew\n.", Some(file));
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -625,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_validate_no_file_skips() {
-        let cmds = parse_edit_commands("Change\nL5:anything\nnew\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L5:anything\nnew\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         // No validation error even though text doesn't match any file
     }
@@ -633,14 +635,14 @@ mod tests {
     #[test]
     fn test_validate_dollar_line() {
         let file = "line1\nline2\nlast line\n";
-        let cmds = parse_edit_commands("AppendAfter\n$:last line\nadded\n.", Some(file)).unwrap();
+        let cmds = parse_edit_commands("AppendAfter Exactly $:last line\nadded\n.", Some(file)).unwrap();
         assert_eq!(cmds.len(), 1);
     }
 
     #[test]
     fn test_validate_dollar_mismatch() {
         let file = "line1\nline2\nactual last\n";
-        let result = parse_edit_commands("AppendAfter\n$:wrong last\nadded\n.", Some(file));
+        let result = parse_edit_commands("AppendAfter Exactly $:wrong last\nadded\n.", Some(file));
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -651,7 +653,7 @@ mod tests {
     #[test]
     fn test_parse_range_with_dollar_end() {
         let cmds =
-            parse_edit_commands("Change\nL5:line five\n$:last line\nnew ending\n.", None).unwrap();
+            parse_edit_commands("Change Start L5:line five\nEnd $:last line\nnew ending\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start, LineRef::Num(5));
         assert_eq!(cmds[0].end, Some(LineRef::Last));
@@ -659,7 +661,7 @@ mod tests {
 
     #[test]
     fn test_parse_dollar_range_with_num_end() {
-        let cmds = parse_edit_commands("Change\n$:first ref\nL5:second ref\nnew\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Start $:first ref\nEnd L5:second ref\nnew\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start, LineRef::Last);
         assert_eq!(cmds[0].end, Some(LineRef::Num(5)));
@@ -667,14 +669,14 @@ mod tests {
 
     #[test]
     fn test_empty_change_content() {
-        let cmds = parse_edit_commands("Change\nL5:old line\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L5:old line\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].content, "");
     }
 
     #[test]
     fn test_content_with_blank_line() {
-        let cmds = parse_edit_commands("Change\nL5:old\nnew line\n\nafter blank\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L5:old\nnew line\n\nafter blank\n.", None).unwrap();
         assert_eq!(cmds[0].content, "new line\n\nafter blank");
     }
 
@@ -693,20 +695,20 @@ mod tests {
 
     #[test]
     fn test_parse_line_ref_without_colon_fails() {
-        let result = parse_edit_commands("Change\nL5 no colon\nnew\n.", None);
+        let result = parse_edit_commands("Change Exactly L5 no colon\nnew\n.", None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_change_with_dot_in_content() {
         // Content line that is just a dot ends the block — same as ex convention
-        let cmds = parse_edit_commands("Change\nL5:old\nnew line\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L5:old\nnew line\n.", None).unwrap();
         assert_eq!(cmds[0].content, "new line");
     }
 
     #[test]
     fn test_parse_empty_line_ref() {
-        let cmds = parse_edit_commands("Change\nL2;\nnew line\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L2;\nnew line\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start, LineRef::Num(2));
         assert_eq!(cmds[0].start_text.as_deref(), Some(""));
@@ -715,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_parse_dollar_empty_line_ref() {
-        let cmds = parse_edit_commands("AppendAfter\n$;\nadded\n.", None).unwrap();
+        let cmds = parse_edit_commands("AppendAfter Exactly $;\nadded\n.", None).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start, LineRef::Last);
         assert_eq!(cmds[0].start_text.as_deref(), Some(""));
@@ -725,7 +727,7 @@ mod tests {
     #[test]
     fn test_validate_empty_line_text() {
         let file = "first\n\nthird\n";
-        let cmds = parse_edit_commands("Change\nL2;\ninserted\n.", Some(file)).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L2;\ninserted\n.", Some(file)).unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].start_text.as_deref(), Some(""));
     }
@@ -733,7 +735,7 @@ mod tests {
     #[test]
     fn test_parse_change_with_empty_line_range() {
         let cmds = parse_edit_commands(
-            "Change\nL1:old start\nL2;\nnew block\n.",
+            "Change Start L1:old start\nEnd L2;\nnew block\n.",
             None,
         )
         .unwrap();
@@ -747,14 +749,14 @@ mod tests {
 
     #[test]
     fn test_validate_texts_against_output_ok() {
-        let cmds = parse_edit_commands("Change\nL2:line two\nREPLACED\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L2:line two\nREPLACED\n.", None).unwrap();
         let output = "L1:line one\nL2:line two\nL3:line three\n";
         assert!(validate_texts_against_output(&cmds, output).is_ok());
     }
 
     #[test]
     fn test_validate_texts_against_output_missing_start() {
-        let cmds = parse_edit_commands("Change\nL2:wrong line\nREPLACED\n.", None).unwrap();
+        let cmds = parse_edit_commands("Change Exactly L2:wrong line\nREPLACED\n.", None).unwrap();
         let output = "L1:line one\nL2:line two\nL3:line three\n";
         let result = validate_texts_against_output(&cmds, output);
         assert!(result.is_err());
@@ -764,7 +766,7 @@ mod tests {
     #[test]
     fn test_validate_texts_against_output_missing_end() {
         let cmds = parse_edit_commands(
-            "Change\nL1:line one\nL5:missing end\nnew\n.",
+            "Change Start L1:line one\nEnd L5:missing end\nnew\n.",
             None,
         )
         .unwrap();

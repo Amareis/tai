@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_check_edit_violations_ok() {
-        let cmds = edit_command::parse_edit_commands("Change\nL2:line two\nREPLACED\n.", None).unwrap();
+        let cmds = edit_command::parse_edit_commands("Change Exactly L2:line two\nREPLACED\n.", None).unwrap();
         let segments = vec![ParsedBlock {
             window: "main.rs".into(),
             mode: BlockMode::Edit(cmds),
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_check_edit_violations_text_mismatch() {
-        let cmds = edit_command::parse_edit_commands("Change\nL2:wrong line\nREPLACED\n.", None).unwrap();
+        let cmds = edit_command::parse_edit_commands("Change Exactly L2:wrong line\nREPLACED\n.", None).unwrap();
         let segments = vec![ParsedBlock {
             window: "main.rs".into(),
             mode: BlockMode::Edit(cmds),

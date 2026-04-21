@@ -18,7 +18,7 @@ async fn test_session() -> SessionDir {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().to_path_buf();
     std::fs::write(project.join("tai.md"), "").ok();
-    SessionDir::create_new(&project, None, false).await.expect("session")
+    SessionDir::create_new(&project, None).await.expect("session")
 }
 
 fn test_server(session: SessionDir, agent: TestAgent) -> Server {
@@ -216,7 +216,7 @@ async fn edit_mode_modifies_file() {
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("edit-test.txt", BlockMode::Edit(Vec::new()), "Change\nL2:line two\nREPLACED\n.")
+            AgentResponse::block("edit-test.txt", BlockMode::Edit(Vec::new()), "Change Exactly L2:line two\nREPLACED\n.")
                 .with_task("editing file"),
         )
         .add_step(
@@ -253,7 +253,7 @@ async fn edit_mode_rejects_unknown_line() {
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("edit-test.txt", BlockMode::Edit(Vec::new()), "Change\nL2:wrong line\nREPLACED\n.")
+            AgentResponse::block("edit-test.txt", BlockMode::Edit(Vec::new()), "Change Exactly L2:wrong line\nREPLACED\n.")
                 .with_task("editing file with bad line ref"),
         )
         .add_step(
