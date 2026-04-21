@@ -1,6 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditCommand {
     pub start: LineRef,
     pub end: Option<LineRef>,
@@ -10,13 +11,13 @@ pub struct EditCommand {
     pub end_text: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineRef {
     Num(usize),
     Last,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EditAction {
     Change,
     Delete,
@@ -24,7 +25,7 @@ pub enum EditAction {
     AppendAfter,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EditError {
     Parse {
         line: usize,
@@ -68,6 +69,27 @@ impl LineRef {
         match self {
             Self::Num(n) => n,
             Self::Last => total_lines,
+        }
+    }
+}
+
+impl std::fmt::Display for LineRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Num(n) => write!(f, "L{n}"),
+            Self::Last => write!(f, "$"),
+        }
+    }
+}
+
+impl EditAction {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Change => "Change",
+            Self::Delete => "Delete",
+            Self::InsertBefore => "InsertBefore",
+            Self::AppendAfter => "AppendAfter",
         }
     }
 }
@@ -331,6 +353,59 @@ fn validate_no_overlaps(commands: &[EditCommand]) -> Result<(), EditError> {
     }
 
     Ok(())
+}
+
+pub fn validate_texts_against_output(commands: &[EditCommand], output: &str) -> Result<(), EditError> {
+    for cmd in commands {
+        if let Some(ref text) = cmd.start_text
+            && !output.contains(text) {
+                return Err(EditError::Parse {
+                    line: 0,
+                    message: format!("line text not found in output: {text}"),
+                });
+            }
+        if let Some(ref text) = cmd.end_text
+            && !output.contains(text) {
+                return Err(EditError::Parse {
+                    line: 0,
+                    message: format!("line text not found in output: {text}"),
+                });
+            }
+    }
+    Ok(())
+}
+
+#[must_use]
+pub fn serialize_edit_commands(commands: &[EditCommand]) -> String {
+    let mut text = String::new();
+    for cmd in commands {
+        text.push_str(cmd.action.as_str());
+        text.push('\n');
+        write_line_ref(&mut text, &cmd.start, cmd.start_text.as_deref());
+        if let Some(end) = &cmd.end {
+            write_line_ref(&mut text, end, cmd.end_text.as_deref());
+        }
+        if cmd.action != EditAction::Delete {
+            if !cmd.content.is_empty() {
+                text.push_str(&cmd.content);
+                text.push('\n');
+            }
+            text.push_str(".\n");
+        }
+    }
+    text
+}
+
+fn write_line_ref(text: &mut String, line_ref: &LineRef, line_text: Option<&str>) {
+    let _ = std::fmt::Write::write_fmt(text, format_args!("{line_ref}"));
+    let t = line_text.unwrap_or("");
+    if t.is_empty() {
+        text.push_str(";\n");
+    } else {
+        text.push(':');
+        text.push_str(t);
+        text.push('\n');
+    }
 }
 
 pub fn sort_bottom_up(commands: &mut [EditCommand]) {
@@ -668,5 +743,34 @@ mod tests {
         assert_eq!(cmds[0].start_text.as_deref(), Some("old start"));
         assert_eq!(cmds[0].end_text.as_deref(), Some(""));
         assert_eq!(cmds[0].content, "new block");
+    }
+
+    #[test]
+    fn test_validate_texts_against_output_ok() {
+        let cmds = parse_edit_commands("Change\nL2:line two\nREPLACED\n.", None).unwrap();
+        let output = "L1:line one\nL2:line two\nL3:line three\n";
+        assert!(validate_texts_against_output(&cmds, output).is_ok());
+    }
+
+    #[test]
+    fn test_validate_texts_against_output_missing_start() {
+        let cmds = parse_edit_commands("Change\nL2:wrong line\nREPLACED\n.", None).unwrap();
+        let output = "L1:line one\nL2:line two\nL3:line three\n";
+        let result = validate_texts_against_output(&cmds, output);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("wrong line"));
+    }
+
+    #[test]
+    fn test_validate_texts_against_output_missing_end() {
+        let cmds = parse_edit_commands(
+            "Change\nL1:line one\nL5:missing end\nnew\n.",
+            None,
+        )
+        .unwrap();
+        let output = "L1:line one\nL2:line two\nL3:line three\n";
+        let result = validate_texts_against_output(&cmds, output);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing end"));
     }
 }

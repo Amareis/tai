@@ -1,7 +1,7 @@
 use super::{Agent, AgentError, AgentResponse};
-use crate::response::parse_response;
+use crate::response::{edit_command, parse_response};
 use crate::state::State;
-use crate::types::ParsedBlock;
+use crate::types::{BlockMode, ParsedBlock};
 use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
@@ -20,6 +20,35 @@ pub struct LlmAgent {
     model: String,
     client: Client<OpenAIConfig>,
     pub debug: bool,
+}
+
+fn check_edit_violations(
+    segments: &[ParsedBlock],
+    outputs: &std::collections::HashMap<String, crate::backend::CmdOutput>,
+) -> Vec<String> {
+    let mut violations = Vec::new();
+    for block in segments {
+        if let BlockMode::Edit(ref cmds) = block.mode {
+            if cmds.is_empty() {
+                violations.push(format!(
+                    "edit:{} — edit commands not parsed.",
+                    block.window
+                ));
+                continue;
+            }
+            let Some(output) = outputs.get(&block.window) else {
+                violations.push(format!(
+                    "edit:{} — no file output available. View the file first with a file block.",
+                    block.window
+                ));
+                continue;
+            };
+            if let Err(e) = edit_command::validate_texts_against_output(cmds, &output.stdout) {
+                violations.push(format!("edit:{} — {e}", block.window));
+            }
+        }
+    }
+    violations
 }
 
 impl LlmAgent {
@@ -50,10 +79,12 @@ impl Agent for LlmAgent {
             resp.mind.len()
         );
 
+        let edit_violations = check_edit_violations(&resp.segments, &state.outputs);
         let needs_mind = resp.mind.is_empty();
         let has_heredoc_violations = !resp.heredoc_violations.is_empty();
+        let has_edit_violations = !edit_violations.is_empty() || !resp.edit_parse_errors.is_empty();
 
-        if needs_mind || has_heredoc_violations {
+        if needs_mind || has_heredoc_violations || has_edit_violations {
             let mut re_messages = messages;
             re_messages.push(ChatCompletionRequestAssistantMessage::from(text.as_str()).into());
             let mut complaint = String::new();
@@ -71,6 +102,18 @@ impl Agent for LlmAgent {
                      Violations: ",
                 );
                 complaint.push_str(&resp.heredoc_violations.join(", "));
+                complaint.push_str(". ");
+            }
+            if has_edit_violations {
+                complaint.push_str(
+                    "Edit block line references do not match the current file output, \
+                     or edit commands could not be parsed. \
+                     Each line reference must exactly match a line from the file view output. \
+                     Violations: ",
+                );
+                let mut all: Vec<String> = resp.edit_parse_errors.clone();
+                all.extend(edit_violations);
+                complaint.push_str(&all.join(", "));
                 complaint.push_str(". ");
             }
             complaint.push_str("You may also include action blocks if needed.");
@@ -246,4 +289,84 @@ fn render_window_summary(state: &State) -> String {
         ),
     ).ok();
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::CmdOutput;
+    use crate::types::{BlockMode, ParsedBlock};
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_check_edit_violations_no_edit_blocks() {
+        let segments = vec![ParsedBlock {
+            window: "build".into(),
+            mode: BlockMode::Watch,
+            content: "echo ok".into(),
+            prose: None,
+            dashboard: false,
+        }];
+        let outputs = HashMap::new();
+        assert!(check_edit_violations(&segments, &outputs).is_empty());
+    }
+
+    #[test]
+    fn test_check_edit_violations_missing_output() {
+        let segments = vec![ParsedBlock {
+            window: "main.rs".into(),
+            mode: BlockMode::Edit(vec![]),
+            content: "Change\nL1:foo\nbar\n.".into(),
+            prose: None,
+            dashboard: false,
+        }];
+        let outputs = HashMap::new();
+        let violations = check_edit_violations(&segments, &outputs);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("edit commands not parsed"));
+    }
+
+    #[test]
+    fn test_check_edit_violations_ok() {
+        let cmds = edit_command::parse_edit_commands("Change\nL2:line two\nREPLACED\n.", None).unwrap();
+        let segments = vec![ParsedBlock {
+            window: "main.rs".into(),
+            mode: BlockMode::Edit(cmds),
+            content: String::new(),
+            prose: None,
+            dashboard: false,
+        }];
+        let mut outputs = HashMap::new();
+        outputs.insert(
+            "main.rs".into(),
+            CmdOutput {
+                exit_code: 0,
+                stdout: "L1:line one\nL2:line two\nL3:line three\n".into(),
+            },
+        );
+        assert!(check_edit_violations(&segments, &outputs).is_empty());
+    }
+
+    #[test]
+    fn test_check_edit_violations_text_mismatch() {
+        let cmds = edit_command::parse_edit_commands("Change\nL2:wrong line\nREPLACED\n.", None).unwrap();
+        let segments = vec![ParsedBlock {
+            window: "main.rs".into(),
+            mode: BlockMode::Edit(cmds),
+            content: String::new(),
+            prose: None,
+            dashboard: false,
+        }];
+        let mut outputs = HashMap::new();
+        outputs.insert(
+            "main.rs".into(),
+            CmdOutput {
+                exit_code: 0,
+                stdout: "L1:line one\nL2:line two\nL3:line three\n".into(),
+            },
+        );
+        let violations = check_edit_violations(&segments, &outputs);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("wrong line"));
+    }
 }

@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockMode {
     Watch,
     Close,
     Exec,
     Ask,
     File,
-    Edit,
+    Edit(Vec<crate::response::edit_command::EditCommand>),
     Write,
     Mind,
 }
@@ -22,7 +22,7 @@ impl std::str::FromStr for BlockMode {
             "exec" => Ok(Self::Exec),
             "ask" => Ok(Self::Ask),
             "file" => Ok(Self::File),
-            "edit" => Ok(Self::Edit),
+            "edit" => Ok(Self::Edit(Vec::new())),
             "write" => Ok(Self::Write),
             "mind" => Ok(Self::Mind),
             _ => Err(format!("unknown block mode: {s}")),
@@ -32,8 +32,8 @@ impl std::str::FromStr for BlockMode {
 
 impl BlockMode {
     #[must_use]
-    pub fn requires_heredoc(self) -> bool {
-        matches!(self, BlockMode::Write | BlockMode::Edit)
+    pub fn requires_heredoc(&self) -> bool {
+        matches!(self, BlockMode::Write | BlockMode::Edit(_))
     }
 }
 
@@ -45,7 +45,7 @@ impl std::fmt::Display for BlockMode {
             BlockMode::Exec => f.write_str("exec"),
             BlockMode::Ask => f.write_str("ask"),
             BlockMode::File => f.write_str("file"),
-            BlockMode::Edit => f.write_str("edit"),
+            BlockMode::Edit(_) => f.write_str("edit"),
             BlockMode::Write => f.write_str("write"),
             BlockMode::Mind => f.write_str("mind"),
         }

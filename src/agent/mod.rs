@@ -30,6 +30,8 @@ pub struct AgentResponse {
     pub complete: bool,
     #[serde(skip)]
     pub heredoc_violations: Vec<String>,
+    #[serde(skip)]
+    pub edit_parse_errors: Vec<String>,
 }
 
 impl AgentResponse {
@@ -40,18 +42,29 @@ impl AgentResponse {
 
     #[must_use]
     pub fn block(window: impl Into<String>, mode: BlockMode, content: impl Into<String>) -> Self {
+        let window = window.into();
+        let content = content.into();
+        let mode = if matches!(mode, BlockMode::Edit(_)) {
+            match crate::response::edit_command::parse_edit_commands(&content, None) {
+                Ok(cmds) => BlockMode::Edit(cmds),
+                Err(_) => BlockMode::Edit(Vec::new()),
+            }
+        } else {
+            mode
+        };
         Self {
             reasoning: String::new(),
             segments: vec![ParsedBlock {
-                window: window.into(),
+                window,
                 mode,
-                content: content.into(),
+                content,
                 prose: None,
                 dashboard: false,
             }],
             mind: String::new(),
             complete: false,
             heredoc_violations: Vec::new(),
+            edit_parse_errors: Vec::new(),
         }
     }
 

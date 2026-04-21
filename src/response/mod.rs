@@ -20,7 +20,7 @@ enum ParsedSegment {
     Prose(String),
 }
 
-fn mode_prefix(mode: BlockMode, dashboard: bool) -> String {
+fn mode_prefix(mode: &BlockMode, dashboard: bool) -> String {
     let base = mode.to_string();
     if dashboard {
         format!("{base}.dashboard")
@@ -37,7 +37,7 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
             text.push_str(prose);
             text.push('\n');
         }
-        let prefix = mode_prefix(block.mode, block.dashboard);
+        let prefix = mode_prefix(&block.mode, block.dashboard);
         match block.mode {
             BlockMode::Close | BlockMode::File => {
                 let _ = std::fmt::Write::write_fmt(
@@ -51,12 +51,26 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                     format_args!("```{}:{}\n{}\n```\n", prefix, block.window, block.content),
                 );
             }
-            BlockMode::Write | BlockMode::Edit => {
+            BlockMode::Write => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
                     format_args!(
                         "```{}:{}\n<<'TAI'\n{}\nTAI\n```\n",
                         prefix, block.window, block.content
+                    ),
+                );
+            }
+            BlockMode::Edit(ref cmds) => {
+                let content = if cmds.is_empty() {
+                    block.content.clone()
+                } else {
+                    edit_command::serialize_edit_commands(cmds)
+                };
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!(
+                        "```{}:{}\n<<'TAI'\n{}\nTAI\n```\n",
+                        prefix, block.window, content
                     ),
                 );
             }
@@ -137,12 +151,23 @@ pub fn parse_response(input: &str) -> AgentResponse {
         }
     }
 
+    let mut edit_parse_errors: Vec<String> = Vec::new();
+    for block in &mut blocks {
+        if let BlockMode::Edit(ref mut cmds) = block.mode && cmds.is_empty() {
+            match edit_command::parse_edit_commands(&block.content, None) {
+                Ok(parsed) => *cmds = parsed,
+                Err(e) => edit_parse_errors.push(format!("edit:{} — {e}", block.window)),
+            }
+        }
+    }
+
     AgentResponse {
         reasoning: String::new(),
         segments: blocks,
         mind,
         complete,
         heredoc_violations,
+        edit_parse_errors,
     }
 }
 
@@ -467,7 +492,7 @@ mod tests {
 
         let h = parse_block_header("edit:src/main.rs").unwrap();
         assert_eq!(h.window, "src/main.rs");
-        assert_eq!(h.mode, BlockMode::Edit);
+        assert!(matches!(h.mode, BlockMode::Edit(_)));
 
         let h = parse_block_header("write:src/main.rs").unwrap();
         assert_eq!(h.window, "src/main.rs");
@@ -571,13 +596,13 @@ mod tests {
 
     #[test]
     fn test_edit_block() {
-        let text = "```edit:src/main.rs\n10,15c\nfn new() {}\n```";
+        let text = "```edit:src/main.rs\nChange\nL10:old start\nL15:old end\nfn new() {}\n.\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
             ParsedSegment::Block { window, mode, content, .. }
-            if window == "src/main.rs" && *mode == BlockMode::Edit && content.contains("10,15c")
+            if window == "src/main.rs" && matches!(mode, BlockMode::Edit(_)) && content.contains("Change")
         ));
     }
 
@@ -636,8 +661,8 @@ mod tests {
             },
             ParsedBlock {
                 window: "src/lib.rs".into(),
-                mode: BlockMode::Edit,
-                content: "10,15c\nfn new() {}\n".into(),
+                mode: BlockMode::Edit(vec![]),
+                content: "Change\nL10:old start\nL15:old end\nfn new() {}\n.\n".into(),
                 prose: None,
                 dashboard: false,
             },
@@ -654,7 +679,7 @@ mod tests {
         let parsed = parse_response(&text);
         assert_eq!(parsed.segments.len(), 3);
         assert_eq!(parsed.segments[0].mode, BlockMode::File);
-        assert_eq!(parsed.segments[1].mode, BlockMode::Edit);
+        assert!(matches!(parsed.segments[1].mode, BlockMode::Edit(_)));
         assert_eq!(parsed.segments[2].mode, BlockMode::Write);
     }
 
@@ -756,12 +781,12 @@ mod tests {
 
     #[test]
     fn test_edit_with_heredoc() {
-        let text = "```edit:src/main.rs\n<<'TAI'\n10c\nfn new() {}\n.\nTAI\n```";
+        let text = "```edit:src/main.rs\n<<'TAI'\nChange\nL10:old line\nfn new() {}\n.\nTAI\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "src/main.rs");
-        assert_eq!(resp.segments[0].mode, BlockMode::Edit);
-        assert!(resp.segments[0].content.contains("10c"));
+        assert!(matches!(resp.segments[0].mode, BlockMode::Edit(_)));
+        assert!(resp.segments[0].content.contains("Change"));
         assert!(resp.heredoc_violations.is_empty());
     }
 
@@ -829,8 +854,8 @@ mod tests {
     fn test_serialize_edit_uses_heredoc() {
         let block = ParsedBlock {
             window: "src/main.rs".into(),
-            mode: BlockMode::Edit,
-            content: "10c\nfn new() {}\n.".into(),
+            mode: BlockMode::Edit(vec![]),
+            content: "Change\nL10:old line\nfn new() {}\n.\n".into(),
             prose: None,
             dashboard: false,
         };

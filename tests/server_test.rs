@@ -216,7 +216,7 @@ async fn edit_mode_modifies_file() {
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("edit-test.txt", BlockMode::Edit, "Change\nL2:line two\nREPLACED\n.")
+            AgentResponse::block("edit-test.txt", BlockMode::Edit(Vec::new()), "Change\nL2:line two\nREPLACED\n.")
                 .with_mind("editing file"),
         )
         .add_step(
@@ -226,6 +226,43 @@ async fn edit_mode_modifies_file() {
                 let stdout = &output.unwrap().stdout;
                 assert!(stdout.contains("REPLACED"), "expected 'REPLACED' in output, got: {stdout}");
                 assert!(!stdout.contains("line two"), "should not contain 'line two', got: {stdout}");
+            },
+            AgentResponse::block("edit-test.txt", BlockMode::Close, "")
+                .with_mind("closing"),
+        );
+
+    let mut server = test_server(session, agent);
+    let state = State::default();
+    let state = server.tick(state).await.unwrap();
+    let state = server.tick(state).await.unwrap();
+    server.tick(state).await.unwrap();
+
+    assert_test_agent(&server);
+}
+
+#[tokio::test]
+#[traced_test]
+async fn edit_mode_rejects_unknown_line() {
+    let session = test_session();
+
+    let agent = TestAgent::new()
+        .add_step(
+            |_state: &State| {},
+            AgentResponse::block("edit-test.txt", BlockMode::Write, "line one\nline two\nline three")
+                .with_mind("creating file"),
+        )
+        .add_step(
+            |_state: &State| {},
+            AgentResponse::block("edit-test.txt", BlockMode::Edit(Vec::new()), "Change\nL2:wrong line\nREPLACED\n.")
+                .with_mind("editing file with bad line ref"),
+        )
+        .add_step(
+            |state: &State| {
+                let output = state.outputs.get("edit-test.txt");
+                assert!(output.is_some(), "expected edit-test.txt in outputs");
+                let stdout = &output.unwrap().stdout;
+                assert!(stdout.contains("edit error:"), "expected edit error in output, got: {stdout}");
+                assert!(!stdout.contains("REPLACED"), "should not contain 'REPLACED', got: {stdout}");
             },
             AgentResponse::block("edit-test.txt", BlockMode::Close, "")
                 .with_mind("closing"),

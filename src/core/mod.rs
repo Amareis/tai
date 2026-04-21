@@ -166,7 +166,7 @@ impl Server {
                 BlockMode::Watch => watch_blocks.push(block),
                 BlockMode::File => file_blocks.push(block),
                 BlockMode::Write => write_blocks.push(block),
-                BlockMode::Edit => edit_blocks.push(block),
+                BlockMode::Edit(_) => edit_blocks.push(block),
                 BlockMode::Mind => {}
             }
         }
@@ -228,26 +228,40 @@ impl Server {
         }
 
         for (path, blocks) in &edit_groups {
+            let prev_output = outputs.get(path).cloned();
             self.session.remove_out(path);
             outputs.remove(path);
 
-            let file_content = self.back.read_file(path).await.ok();
-            let file_str = file_content.as_deref();
-
             let mut all_commands = Vec::new();
+            let mut edit_err: Option<edit_command::EditError> = None;
+
             for block in blocks {
-                match edit_command::parse_edit_commands(&block.content, file_str) {
-                    Ok(cmds) => all_commands.extend(cmds),
-                    Err(e) => {
-                        warn!("edit parse error for {path}: {e}");
-                        let output = crate::backend::CmdOutput {
-                            exit_code: 1,
-                            stdout: format!("edit error: {e}"),
-                        };
-                        self.session.write_out(path, &output);
-                        outputs.insert(path.clone(), output);
+                if let BlockMode::Edit(ref cmds) = block.mode {
+                    if cmds.is_empty() {
+                        edit_err = Some(edit_command::EditError::Parse {
+                            line: 0,
+                            message: "edit commands not parsed".to_string(),
+                        });
+                        break;
                     }
+                    if let Some(ref out) = prev_output
+                        && let Err(e) = edit_command::validate_texts_against_output(cmds, &out.stdout) {
+                            edit_err = Some(e);
+                            break;
+                        }
+                    all_commands.extend(cmds.iter().cloned());
                 }
+            }
+
+            if let Some(e) = edit_err {
+                warn!("edit error for {path}: {e}");
+                let output = crate::backend::CmdOutput {
+                    exit_code: 1,
+                    stdout: format!("edit error: {e}"),
+                };
+                self.session.write_out(path, &output);
+                outputs.insert(path.clone(), output);
+                continue;
             }
 
             if all_commands.is_empty() {

@@ -12,7 +12,6 @@ const AWK: &str = r#"'{ if ($0 ~ /^[[:space:]]*$/) print "L" NR ";"; else print 
 
 #[async_trait]
 pub trait Backend: Send + Sync {
-    async fn read_file(&self, path: &str) -> Result<String, std::io::Error>;
     async fn run(&self, title: &str, command: &str) -> CmdOutput;
 
     async fn file(&self, title: &str) -> CmdOutput {
