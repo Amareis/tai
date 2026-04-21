@@ -187,7 +187,9 @@ fn parse_leading_number<'a>(
     line_num: usize,
     original: &str,
 ) -> Result<(LineRef, &'a str), EditError> {
-    let num_str: String = s.chars().take_while(char::is_ascii_digit).collect();
+    let s = s.strip_prefix('L').unwrap_or(s);
+    let num_str_end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let num_str = &s[..num_str_end];
     if num_str.is_empty() {
         return Err(EditError::Parse {
             line: line_num,
@@ -379,5 +381,65 @@ mod tests {
         let cmds = parse_edit_commands("5c\nline one\nline two\nline three\n.").unwrap();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].content, "line one\nline two\nline three");
+    }
+    #[test]
+    fn test_parse_l_prefix_single() {
+        let cmds = parse_edit_commands("L5c\nnew line").unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].start, LineRef::Num(5));
+        assert_eq!(cmds[0].end, None);
+        assert_eq!(cmds[0].action, EditAction::Change);
+        assert_eq!(cmds[0].content, "new line");
+    }
+
+    #[test]
+    fn test_parse_l_prefix_range() {
+        let cmds = parse_edit_commands("L10,L15c\nfn new() {}").unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].start, LineRef::Num(10));
+        assert_eq!(cmds[0].end, Some(LineRef::Num(15)));
+        assert_eq!(cmds[0].action, EditAction::Change);
+    }
+
+    #[test]
+    fn test_parse_l_prefix_delete() {
+        let cmds = parse_edit_commands("L5d").unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].action, EditAction::Delete);
+        assert_eq!(cmds[0].start, LineRef::Num(5));
+    }
+
+    #[test]
+    fn test_parse_l_prefix_mixed_with_dollar() {
+        let cmds = parse_edit_commands("L5,$c\n till end").unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].start, LineRef::Num(5));
+        assert_eq!(cmds[0].end, Some(LineRef::Last));
+        assert_eq!(cmds[0].action, EditAction::Change);
+    }
+
+    #[test]
+    fn test_parse_dollar_comma_l_prefix() {
+        let cmds = parse_edit_commands("$,L5c\nstuff").unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].start, LineRef::Last);
+        assert_eq!(cmds[0].end, Some(LineRef::Num(5)));
+        assert_eq!(cmds[0].action, EditAction::Change);
+    }
+
+    #[test]
+    fn test_parse_l_prefix_append() {
+        let cmds = parse_edit_commands("L5a\nafter five").unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].start, LineRef::Num(5));
+        assert_eq!(cmds[0].action, EditAction::AppendAfter);
+    }
+
+    #[test]
+    fn test_parse_l_prefix_insert() {
+        let cmds = parse_edit_commands("L5i\nbefore five").unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].start, LineRef::Num(5));
+        assert_eq!(cmds[0].action, EditAction::InsertBefore);
     }
 }
