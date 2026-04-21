@@ -25,6 +25,11 @@ impl LocalBackend {
 
 #[async_trait]
 impl Backend for LocalBackend {
+    async fn read_file(&self, path: &str) -> Result<String, std::io::Error> {
+        let full_path = self.cwd.join(path);
+        tokio::fs::read_to_string(&full_path).await
+    }
+
     async fn run(&self, title: &str, command: &str) -> CmdOutput {
         debug!("run: executing '{title}': {command}");
         let full_script = format!("set -e -o pipefail;\n{command}");

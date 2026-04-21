@@ -216,7 +216,7 @@ async fn edit_mode_modifies_file() {
         )
         .add_step(
             |_state: &State| {},
-            AgentResponse::block("edit-test.txt", BlockMode::Edit, "2c\nREPLACED")
+            AgentResponse::block("edit-test.txt", BlockMode::Edit, "Change\nL2:line two\nREPLACED\n.")
                 .with_mind("editing file"),
         )
         .add_step(

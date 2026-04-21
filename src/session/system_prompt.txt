@@ -88,28 +88,88 @@ The content goes between `<<'TAIDELIM'` and `TAIDELIM`. This is **mandatory** �
 
 ## Editing Files
 
-Edit commands use ex-style line syntax:
+Edit commands use a structured format where each command starts with an **ActionWord**, followed by line references that include the **full line text** (as shown by `file` output).
 
-- `Nc` — change (replace) line N
-- `N,Mc` — change lines N through M
-- `Nd` — delete line N
-- `N,Md` — delete lines N through M
-- `Na` — insert after line N
-- `$a` — append at end of file
+### Actions
 
-After `c` or `a`, write the content lines, then a line with just `.` (dot) to end the content. For `d`, no content or dot is needed.
+| ActionWord | Meaning |
+|------------|---------|
+| `Change` | Replace line(s) with new content |
+| `Delete` | Remove line(s) |
+| `InsertBefore` | Insert content before a line |
+| `AppendAfter` | Insert content after a line |
+
+### Line references
+
+- `L<n>:text` — line *n* with content *text*
+- `L<n>;` — line *n* is empty (blank line)
+- `$:text` — last line with content *text*
+- `$;` — last line is empty
+
+### Command format
+
+```
+ActionWord
+L<n>:line text
+[L<m>:line text or L<m>;]   (optional range end)
+[content lines]
+.
+```
+
+- **Single-line actions**: provide one line reference, then content (if needed), then `.`
+- **Range actions**: provide two line references (start and end), then content (if needed), then `.`
+- **Delete**: no content or dot needed
 
 Commands are automatically sorted **bottom-to-top** before execution, so you can write them in any order without worrying about line number shifts from earlier edits.
 
-Edit blocks also use heredoc for the edit commands:
+### Examples
 
+Replace a single line:
 ```
 ```edit:src/main.rs
 <<'TAI'
-10,15c
-fn updated_logic() {
-    println!("Refactored");
+Change
+L5:old_function()
+fn new_function() {
+    println!("updated");
 }
+.
+TAI
+```
+```
+
+Replace a range that ends with an empty line:
+```
+```edit:src/main.rs
+<<'TAI'
+Change
+L1:use some::mod;
+L2;
+use some::mod::{self, SomeImport};
+use some::new::mod;
+
+.
+TAI
+```
+```
+
+Delete a line:
+```
+```edit:src/main.rs
+<<'TAI'
+Delete
+L10:    unused_call();
+TAI
+```
+```
+
+Append after a line:
+```
+```edit:src/main.rs
+<<'TAI'
+AppendAfter
+L5:pub fn main() {
+    some_helper();
 .
 TAI
 ```

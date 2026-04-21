@@ -231,9 +231,12 @@ impl Server {
             self.session.remove_out(path);
             outputs.remove(path);
 
+            let file_content = self.back.read_file(path).await.ok();
+            let file_str = file_content.as_deref();
+
             let mut all_commands = Vec::new();
             for block in blocks {
-                match edit_command::parse_edit_commands(&block.content) {
+                match edit_command::parse_edit_commands(&block.content, file_str) {
                     Ok(cmds) => all_commands.extend(cmds),
                     Err(e) => {
                         warn!("edit parse error for {path}: {e}");
