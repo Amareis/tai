@@ -3,6 +3,7 @@ use crate::types::{BlockMode, ParsedBlock};
 
 pub mod edit_command;
 
+#[derive(Debug)]
 struct Header {
     window: String,
     mode: BlockMode,
@@ -74,10 +75,10 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                     ),
                 );
             }
-            BlockMode::Mind => {
+            BlockMode::Task => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```mind\n{}\n```\n", block.content),
+                    format_args!("```task\n{}\n```\n", block.content),
                 );
             }
         }
@@ -91,7 +92,7 @@ pub fn parse_response(input: &str) -> AgentResponse {
 
     let mut blocks: Vec<ParsedBlock> = Vec::new();
     let mut prose_buf: Option<String> = None;
-    let mut mind = String::new();
+    let mut task = String::new();
     let mut complete = false;
     let mut heredoc_violations: Vec<String> = Vec::new();
 
@@ -109,11 +110,11 @@ pub fn parse_response(input: &str) -> AgentResponse {
                 dashboard,
                 content,
             } => {
-                if mode == BlockMode::Mind {
+                if matches!(mode, BlockMode::Task) {
                     if window == "complete" {
                         complete = true;
                     }
-                    mind = content;
+                    task = content;
                     prose_buf = None;
                     continue;
                 }
@@ -164,7 +165,7 @@ pub fn parse_response(input: &str) -> AgentResponse {
     AgentResponse {
         reasoning: String::new(),
         segments: blocks,
-        mind,
+        task,
         complete,
         heredoc_violations,
         edit_parse_errors,
@@ -190,7 +191,7 @@ fn parse_response_segments(input: &str) -> Vec<ParsedSegment> {
             let (_body_end, close_end, content) = parse_block_body(input, header_end);
 
             if let Some(hdr) = hdr_opt
-                && (!hdr.window.is_empty() || hdr.mode == BlockMode::Mind)
+                && (!hdr.window.is_empty() || hdr.mode == BlockMode::Task)
             {
                 segments.push(ParsedSegment::Block {
                     window: hdr.window,
@@ -498,9 +499,9 @@ mod tests {
         assert_eq!(h.window, "src/main.rs");
         assert_eq!(h.mode, BlockMode::Write);
 
-        let h = parse_block_header("mind").unwrap();
+        let h = parse_block_header("task").unwrap();
         assert_eq!(h.window, "");
-        assert_eq!(h.mode, BlockMode::Mind);
+        assert!(matches!(h.mode, BlockMode::Task));
     }
 
     #[test]
@@ -732,38 +733,38 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_mind_block() {
-        let text = "```mind\n1. Check build\n2. Fix errors\n```\n```watch:build\ncargo build\n```";
+    fn test_parse_task_block_with_other() {
+        let text = "```task\n1. Check build\n2. Fix errors\n```\n```watch:build\ncargo build\n```";
         let resp = parse_response(text);
-        assert_eq!(resp.mind, "1. Check build\n2. Fix errors");
+        assert_eq!(resp.task, "1. Check build\n2. Fix errors");
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "build");
         assert_eq!(resp.segments[0].mode, BlockMode::Watch);
     }
 
     #[test]
-    fn test_parse_mind_only() {
-        let text = "Some reasoning\n\n```mind\nWait for user input then proceed\n```";
+    fn test_parse_task_only() {
+        let text = "Some reasoning\n\n```task\nWait for user input then proceed\n```";
         let resp = parse_response(text);
-        assert_eq!(resp.mind, "Wait for user input then proceed");
+        assert_eq!(resp.task, "Wait for user input then proceed");
         assert!(resp.segments.is_empty());
     }
 
     #[test]
-    fn test_parse_no_mind() {
+    fn test_parse_no_task() {
         let text = "```watch:build\ncargo build\n```";
         let resp = parse_response(text);
-        assert!(resp.mind.is_empty());
+        assert!(resp.task.is_empty());
         assert_eq!(resp.segments.len(), 1);
     }
 
     #[test]
-    fn test_mind_not_in_segments() {
-        let text = "```mind\nmy plan\n```\n```watch:build\ncargo build\n```";
+    fn test_task_not_in_segments() {
+        let text = "```task\nmy plan\n```\n```watch:build\ncargo build\n```";
         let resp = parse_response(text);
-        assert_eq!(resp.mind, "my plan");
+        assert_eq!(resp.task, "my plan");
         assert_eq!(resp.segments.len(), 1);
-        assert!(resp.segments.iter().all(|s| s.mode != BlockMode::Mind));
+        assert!(resp.segments.iter().all(|s| !matches!(s.mode, BlockMode::Task)));
     }
 
     #[test]
@@ -825,29 +826,47 @@ mod tests {
         assert!(parsed.segments[0].content.contains("```rust"));
     }
     #[test]
-    fn test_mind_complete_sets_flag() {
-        let text = "```mind:complete\nTask finished\n```";
+    fn test_task_complete_sets_flag() {
+        let text = "```task:complete\nTask finished\n```";
         let resp = parse_response(text);
         assert!(resp.complete);
-        assert_eq!(resp.mind, "Task finished");
+        assert_eq!(resp.task, "Task finished");
         assert!(resp.segments.is_empty());
     }
 
     #[test]
-    fn test_mind_complete_with_blocks() {
-        let text = "```watch:build\ncargo build\n```\n```mind:complete\nAll done\n```";
+    fn test_task_complete_with_blocks() {
+        let text = "```watch:build\ncargo build\n```\n```task:complete\nAll done\n```";
         let resp = parse_response(text);
         assert!(resp.complete);
-        assert_eq!(resp.mind, "All done");
+        assert_eq!(resp.task, "All done");
         assert_eq!(resp.segments.len(), 1);
     }
 
     #[test]
-    fn test_mind_without_complete_no_flag() {
-        let text = "```mind\nStill working\n```";
+    fn test_task_without_complete_no_flag() {
+        let text = "```task\nStill working\n```";
         let resp = parse_response(text);
         assert!(!resp.complete);
-        assert_eq!(resp.mind, "Still working");
+        assert_eq!(resp.task, "Still working");
+    }
+
+    #[test]
+    fn test_parse_task_block() {
+        let text = "```task\nRefactor auth module\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.segments.len(), 0);
+        assert_eq!(resp.task, "Refactor auth module");
+        assert!(!resp.complete);
+    }
+
+    #[test]
+    fn test_parse_task_complete() {
+        let text = "```task:complete\nDone refactoring.\n```";
+        let resp = parse_response(text);
+        assert_eq!(resp.segments.len(), 0);
+        assert_eq!(resp.task, "Done refactoring.");
+        assert!(resp.complete);
     }
 
     #[test]

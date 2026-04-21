@@ -25,6 +25,7 @@ pub fn create_server(
 
 pub async fn run_server(
     session_path: Option<&Path>,
+    task: Option<&str>,
     debug: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -32,7 +33,7 @@ pub async fn run_server(
         .init();
 
     let project_dir = env::current_dir()?;
-    let session = SessionDir::create_or_open(session_path, &project_dir, debug)?;
+    let session = SessionDir::create_or_open(session_path, &project_dir, task, debug)?;
 
     let model = env::var("OPENAI_MODEL")?;
     let mut agent = Box::new(LlmAgent::new(model));

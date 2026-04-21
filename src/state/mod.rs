@@ -10,6 +10,7 @@ pub struct State {
     pub outputs: HashMap<String, CmdOutput>,
     pub tick_n: u64,
     pub response: AgentResponse,
+    pub task: String,
 }
 
 impl State {
@@ -27,6 +28,7 @@ impl State {
             outputs,
             tick_n,
             response,
+            task: String::new(),
         }
     }
 

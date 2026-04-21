@@ -9,6 +9,21 @@ use uuid::Uuid;
 const SYSTEM_PROMPT: &str = include_str!("system_prompt.txt");
 const DEFAULT_TAI: &str = include_str!("default_tai.md");
 
+fn initial_tai_content(project_dir: &Path, task: Option<&str>) -> String {
+    if let Some(t) = task {
+        format!(
+            "Project conventions and architecture reference.\n\
+             ```file:work/AGENTS.md\n```\n\n\
+             Current project structure.\n\
+             ```watch.dashboard:tree\ntree -l --gitignore\n```\n\n\
+             ```task\nKnown: (none yet)\nResolved: (none yet)\nContext: Starting fresh — task provided via CLI.\nDo: {t}\n```\n"
+        )
+    } else {
+        std::fs::read_to_string(project_dir.join("tai.md"))
+            .unwrap_or_else(|_| DEFAULT_TAI.to_string())
+    }
+}
+
 pub struct SessionDir {
     workspace: PathBuf,
     internal: PathBuf,
@@ -16,7 +31,7 @@ pub struct SessionDir {
 }
 
 impl SessionDir {
-    pub fn create_new(project_dir: &Path, debug: bool) -> Result<Self, std::io::Error> {
+    pub fn create_new(project_dir: &Path, task: Option<&str>, debug: bool) -> Result<Self, std::io::Error> {
         let id = generate_short_id();
         let workspace = if debug {
             project_dir.join("../../tai-prev").join(&id)
@@ -42,8 +57,7 @@ impl SessionDir {
             project: project_dir.to_path_buf(),
         };
 
-        let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
-            .unwrap_or_else(|_| DEFAULT_TAI.to_string());
+        let tai_content = initial_tai_content(project_dir, task);
         let resp = parse_response(&tai_content);
         session.write_tick_response(0, &resp);
 
@@ -78,6 +92,7 @@ impl SessionDir {
     pub fn create_or_open(
         path: Option<&Path>,
         project_dir: &Path,
+        task: Option<&str>,
         debug: bool,
     ) -> Result<Self, std::io::Error> {
         match path {
@@ -96,14 +111,13 @@ impl SessionDir {
                 }
                 std::fs::write(session.internal.join("system-prompt.txt"), SYSTEM_PROMPT)?;
                 std::fs::write(session.internal.join("tick"), "0")?;
-                let tai_content = std::fs::read_to_string(project_dir.join("tai.md"))
-                    .unwrap_or_else(|_| DEFAULT_TAI.to_string());
+                let tai_content = initial_tai_content(project_dir, task);
                 let resp = parse_response(&tai_content);
                 session.write_tick_response(0, &resp);
                 info!("session created at: {}", p.display());
                 Ok(session)
             }
-            None => Self::create_new(project_dir, debug),
+            None => Self::create_new(project_dir, task, debug),
         }
     }
 

@@ -25,7 +25,7 @@ pub trait Agent: Send + Sync {
 pub struct AgentResponse {
     pub reasoning: String,
     pub segments: Vec<ParsedBlock>,
-    pub mind: String,
+    pub task: String,
     #[serde(default)]
     pub complete: bool,
     #[serde(skip)]
@@ -61,7 +61,7 @@ impl AgentResponse {
                 prose: None,
                 dashboard: false,
             }],
-            mind: String::new(),
+            task: String::new(),
             complete: false,
             heredoc_violations: Vec::new(),
             edit_parse_errors: Vec::new(),
@@ -81,8 +81,8 @@ impl AgentResponse {
     }
 
     #[must_use]
-    pub fn with_mind(mut self, mind: &str) -> Self {
-        self.mind = mind.to_string();
+    pub fn with_task(mut self, task: &str) -> Self {
+        self.task = task.to_string();
         self
     }
 }

@@ -74,24 +74,25 @@ impl Agent for LlmAgent {
         let mut resp = parse_response(&text).with_reasoning(&reasoning);
 
         info!(
-            "llm step: parsed {} segments, mind {} bytes",
+            "llm step: parsed {} segments, task {} bytes",
             resp.segments.len(),
-            resp.mind.len()
+            resp.task.len()
         );
 
         let edit_violations = check_edit_violations(&resp.segments, &state.outputs);
-        let needs_mind = resp.mind.is_empty();
+        let needs_task = resp.task.is_empty();
         let has_heredoc_violations = !resp.heredoc_violations.is_empty();
         let has_edit_violations = !edit_violations.is_empty() || !resp.edit_parse_errors.is_empty();
 
-        if needs_mind || has_heredoc_violations || has_edit_violations {
+        if needs_task || has_heredoc_violations || has_edit_violations {
             let mut re_messages = messages;
             re_messages.push(ChatCompletionRequestAssistantMessage::from(text.as_str()).into());
             let mut complaint = String::new();
-            if needs_mind {
+            if needs_task {
                 complaint.push_str(
-                    "You forgot to include a `mind` block. \
-                     You MUST reply with a ```mind block containing your plan for the next tick. \
+                    "You forgot to include a `task` block. \
+                     You MUST reply with a ```task block containing your current status and plan for the next tick. \
+                     Include: Known, Resolved, Context, Do. \
                      It will be APPENDED to your previous answer, so you don't need to duplicate all other commands.",
                 );
             }
@@ -120,8 +121,8 @@ impl Agent for LlmAgent {
             re_messages.push(ChatCompletionRequestUserMessage::from(complaint.as_str()).into());
             let (re_text, re_reasoning) = self.call_llm(&re_messages).await?;
             let re_resp = parse_response(&re_text).with_reasoning(&re_reasoning);
-            if !re_resp.mind.is_empty() {
-                resp.mind = re_resp.mind;
+            if !re_resp.task.is_empty() {
+                resp.task = re_resp.task;
             }
             let fixed_segments: Vec<ParsedBlock> = re_resp
                 .segments
@@ -130,8 +131,8 @@ impl Agent for LlmAgent {
                 .collect();
             resp.segments.extend(fixed_segments);
             info!(
-                "llm step: re-prompt done, mind {} bytes",
-                resp.mind.len()
+                "llm step: re-prompt done, task {} bytes",
+                resp.task.len()
             );
         }
 
@@ -228,9 +229,9 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
 
     write_blocks(&mut body, &dashboard, state);
 
-    if !state.response.mind.is_empty() {
-        body.push_str("## Mind\n");
-        body.push_str(&state.response.mind);
+    if !state.task.is_empty() {
+        body.push_str("## Task\n");
+        body.push_str(&state.task);
         body.push_str("\n\n");
     }
 
@@ -264,8 +265,8 @@ fn estimate_tokens(text: &str) -> usize {
 fn render_window_summary(state: &State) -> String {
     let mut body = String::from("== Windows ==\n");
     let mut total_tokens: usize = estimate_tokens(&state.system);
-    if !state.response.mind.is_empty() {
-        total_tokens += estimate_tokens(&state.response.mind);
+    if !state.task.is_empty() {
+        total_tokens += estimate_tokens(&state.task);
     }
 
     for segment in &state.segments {

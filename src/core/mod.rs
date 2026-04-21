@@ -63,6 +63,7 @@ impl Server {
             state.segments.len()
         );
 
+        let mut last_task = String::new();
         loop {
             state.system = self.session.read_system_prompt().await;
 
@@ -84,9 +85,15 @@ impl Server {
                     if !matches!(e, CoreError::Interrupted) {
                         warn!("tick error: {}", e);
                     }
+                    if !last_task.is_empty() {
+                        println!("\n{last_task}");
+                    }
                     break;
                 }
-                Ok(s) => state = s,
+                Ok(s) => {
+                    last_task = s.task.clone();
+                    state = s;
+                }
             }
 
             self.session
@@ -97,6 +104,9 @@ impl Server {
             self.session.write_tick(state.tick_n);
 
             if state.is_complete() {
+                if !last_task.is_empty() {
+                    println!("\n{last_task}");
+                }
                 break;
             }
         }
@@ -131,11 +141,12 @@ impl Server {
 
         let response = self.agent.step(&state).await?;
         info!(
-            "tick #{tick_n}: agent responded ({} segments, mind {} bytes)",
+            "tick #{tick_n}: agent responded ({} segments, task {} bytes)",
             response.segments.len(),
-            response.mind.len()
+            response.task.len()
         );
 
+        state.task = response.task.clone();
         state.response = response;
 
         info!("tick #{tick_n}: done");
@@ -167,7 +178,7 @@ impl Server {
                 BlockMode::File => file_blocks.push(block),
                 BlockMode::Write => write_blocks.push(block),
                 BlockMode::Edit(_) => edit_blocks.push(block),
-                BlockMode::Mind => {}
+                BlockMode::Task => {}
             }
         }
 

@@ -12,7 +12,7 @@ tree -l --gitignore
 What we do today?
 ```
 
-```mind
+```task
 Known: (none yet)
 Resolved: (none yet)
 Context: Starting fresh — asked for task input.

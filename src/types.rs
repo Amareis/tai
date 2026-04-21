@@ -9,7 +9,7 @@ pub enum BlockMode {
     File,
     Edit(Vec<crate::response::edit_command::EditCommand>),
     Write,
-    Mind,
+    Task,
 }
 
 impl std::str::FromStr for BlockMode {
@@ -24,7 +24,7 @@ impl std::str::FromStr for BlockMode {
             "file" => Ok(Self::File),
             "edit" => Ok(Self::Edit(Vec::new())),
             "write" => Ok(Self::Write),
-            "mind" => Ok(Self::Mind),
+            "task" => Ok(Self::Task),
             _ => Err(format!("unknown block mode: {s}")),
         }
     }
@@ -34,6 +34,11 @@ impl BlockMode {
     #[must_use]
     pub fn requires_heredoc(&self) -> bool {
         matches!(self, BlockMode::Write | BlockMode::Edit(_))
+    }
+
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        matches!(self, BlockMode::Close | BlockMode::Task)
     }
 }
 
@@ -47,7 +52,7 @@ impl std::fmt::Display for BlockMode {
             BlockMode::File => f.write_str("file"),
             BlockMode::Edit(_) => f.write_str("edit"),
             BlockMode::Write => f.write_str("write"),
-            BlockMode::Mind => f.write_str("mind"),
+            BlockMode::Task => f.write_str("task"),
         }
     }
 }
