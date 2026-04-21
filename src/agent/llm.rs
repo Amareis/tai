@@ -64,9 +64,11 @@ impl LlmAgent {
 
 type MyStreamingType = Pin<Box<dyn Stream<Item = Result<Value, OpenAIError>> + Send>>;
 
+const MAX_RETRIES: usize = 3;
+
 #[async_trait]
 impl Agent for LlmAgent {
-    #[allow(clippy::indexing_slicing)]
+    #[allow(clippy::too_many_lines)]
     async fn step(&self, state: &State) -> Result<AgentResponse, AgentError> {
         let messages = state_to_messages(state);
         let (text, reasoning) = self.call_llm(&messages).await?;
@@ -78,15 +80,20 @@ impl Agent for LlmAgent {
             resp.segments.len(),
             resp.task.len()
         );
+        let mut re_messages = messages;
+        re_messages.push(ChatCompletionRequestAssistantMessage::from(text.as_str()).into());
 
-        let edit_violations = check_edit_violations(&resp.segments, &state.outputs);
-        let needs_task = resp.task.is_empty();
-        let has_heredoc_violations = !resp.heredoc_violations.is_empty();
-        let has_edit_violations = !edit_violations.is_empty() || !resp.edit_parse_errors.is_empty();
+        for attempt in 1..=MAX_RETRIES {
+            let edit_violations = check_edit_violations(&resp.segments, &state.outputs);
+            let needs_task = resp.task.is_empty();
+            let has_heredoc_violations = !resp.heredoc_violations.is_empty();
+            let has_edit_violations =
+                !edit_violations.is_empty() || !resp.edit_parse_errors.is_empty();
 
-        if needs_task || has_heredoc_violations || has_edit_violations {
-            let mut re_messages = messages;
-            re_messages.push(ChatCompletionRequestAssistantMessage::from(text.as_str()).into());
+            if !needs_task && !has_heredoc_violations && !has_edit_violations {
+                break;
+            }
+
             let mut complaint = String::new();
             if needs_task {
                 complaint.push_str(
@@ -119,21 +126,70 @@ impl Agent for LlmAgent {
             }
             complaint.push_str("You may also include action blocks if needed.");
             re_messages.push(ChatCompletionRequestUserMessage::from(complaint.as_str()).into());
+
             let (re_text, re_reasoning) = self.call_llm(&re_messages).await?;
             let re_resp = parse_response(&re_text).with_reasoning(&re_reasoning);
+
+            info!(
+                "llm step: re-prompt attempt {}/{}, parsed {} segments",
+                attempt,
+                MAX_RETRIES,
+                re_resp.segments.len()
+            );
+
             if !re_resp.task.is_empty() {
                 resp.task = re_resp.task;
             }
-            let fixed_segments: Vec<ParsedBlock> = re_resp
-                .segments
-                .into_iter()
-                .filter(|s| !s.mode.requires_heredoc() || !s.content.contains("```") || re_resp.heredoc_violations.is_empty())
+
+            // Collect windows that still have parse/heredoc errors in the re-response
+            let bad_re_windows: std::collections::HashSet<String> = re_resp
+                .heredoc_violations
+                .iter()
+                .chain(&re_resp.edit_parse_errors)
+                .filter_map(|e| {
+                    // e.g. "write:readme.md — ..." or "edit:src/main.rs — ..."
+                    let prefix = e.split_once(" — ")?.0;
+                    let (_, window) = prefix.split_once(':')?;
+                    Some(window.to_string())
+                })
                 .collect();
-            resp.segments.extend(fixed_segments);
-            info!(
-                "llm step: re-prompt done, task {} bytes",
-                resp.task.len()
+
+            // Remove original segments for windows addressed by the re-response
+            let re_windows: std::collections::HashSet<String> =
+                re_resp.segments.iter().map(|s| s.window.clone()).collect();
+            resp.segments.retain(|s| !re_windows.contains(&s.window));
+
+            // Add clean segments from the re-response
+            resp.segments.extend(
+                re_resp
+                    .segments
+                    .into_iter()
+                    .filter(|s| !bad_re_windows.contains(&s.window)),
             );
+
+            // Update violations for next check
+            resp.heredoc_violations = re_resp.heredoc_violations;
+            resp.edit_parse_errors = re_resp.edit_parse_errors;
+
+            re_messages.push(ChatCompletionRequestAssistantMessage::from(re_text.as_str()).into());
+        }
+
+        // Final validation after all retries
+        let final_edit_violations = check_edit_violations(&resp.segments, &state.outputs);
+        let final_needs_task = resp.task.is_empty();
+        let final_has_heredoc = !resp.heredoc_violations.is_empty();
+        let final_has_edit =
+            !final_edit_violations.is_empty() || !resp.edit_parse_errors.is_empty();
+
+        if final_needs_task || final_has_heredoc || final_has_edit {
+            let mut all_violations: Vec<String> = Vec::new();
+            if final_needs_task {
+                all_violations.push("missing task block".into());
+            }
+            all_violations.extend(resp.heredoc_violations);
+            all_violations.extend(resp.edit_parse_errors);
+            all_violations.extend(final_edit_violations);
+            return Err(AgentError::InvalidResponse(all_violations));
         }
 
         if self.debug {

@@ -95,6 +95,8 @@ pub enum AgentError {
     Timeout,
     #[error("LLM error: {0}")]
     Llm(#[from] OpenAIError),
+    #[error("response validation failed after retries: {0:?}")]
+    InvalidResponse(Vec<String>),
 }
 
 pub struct NopAgent;

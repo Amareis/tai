@@ -70,7 +70,7 @@ impl Server {
             state.system = self.session.read_system_prompt().await;
 
             let result = {
-                let tick_fut = self.tick(state);
+                let tick_fut = self.tick(&mut state);
                 tokio::pin!(tick_fut);
 
                 tokio::select! {
@@ -82,6 +82,12 @@ impl Server {
                 }
             };
 
+            // Persist state even if tick errored, since update_state may have already applied side effects
+            self.session
+                .write_tick_response(state.tick_n, &state.response).await;
+            self.session.write_index(&state.segments).await;
+            self.session.write_tick(state.tick_n).await;
+
             match result {
                 Err(e) => {
                     if !matches!(e, CoreError::Interrupted) {
@@ -90,20 +96,12 @@ impl Server {
                     if !last_task.is_empty() {
                         println!("\n{last_task}");
                     }
-                    break;
+                    return Err(e);
                 }
-                Ok(s) => {
-                    last_task = s.task.clone();
-                    state = s;
+                Ok(()) => {
+                    last_task = state.task.clone();
                 }
             }
-
-            self.session
-                .write_tick_response(state.tick_n, &state.response).await;
-
-            self.session.write_index(&state.segments).await;
-
-            self.session.write_tick(state.tick_n).await;
 
             if self.debug {
                 break;
@@ -121,16 +119,16 @@ impl Server {
         Ok(())
     }
 
-    pub async fn tick(&mut self, mut state: State) -> Result<State, CoreError> {
+    pub async fn tick(&mut self, state: &mut State) -> Result<(), CoreError> {
         if state.is_complete() {
-            return Ok(state);
+            return Ok(());
         }
 
         state.tick_n += 1;
         let tick_n = state.tick_n;
         info!("tick #{tick_n}: start");
 
-        self.update_state(&mut state).await;
+        self.update_state(state).await;
 
         info!(
             "tick #{tick_n}: state updated (now {} segments), calling agent",
@@ -138,21 +136,21 @@ impl Server {
         );
 
         if state.is_complete() {
-            return Ok(state);
+            return Ok(());
         }
 
-        let response = self.agent.step(&state).await?;
+        let response = self.agent.step(state).await?;
         info!(
             "tick #{tick_n}: agent responded ({} segments, task {} bytes)",
             response.segments.len(),
             response.task.len()
         );
 
-        state.task = response.task.clone();
+        state.task.clone_from(&response.task);
         state.response = response;
 
         info!("tick #{tick_n}: done");
-        Ok(state)
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]

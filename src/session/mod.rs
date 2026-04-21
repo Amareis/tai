@@ -69,22 +69,31 @@ impl SessionDir {
         let workspace = std::env::temp_dir().join(format!("tai-{id}"));
 
         let internal = workspace.join(".session");
-        tokio::fs::create_dir_all(internal.join("out")).await?;
-        tokio::fs::create_dir_all(internal.join("responses")).await?;
-
-        let symlink = workspace.join("work");
-        if !tokio::fs::try_exists(&symlink).await.unwrap_or(false) {
-            tokio::fs::symlink(project_dir, &symlink).await?;
-        }
-
-        tokio::fs::write(internal.join("system-prompt.txt"), SYSTEM_PROMPT).await?;
-        tokio::fs::write(internal.join("tick"), "0").await?;
-
         let session = Self {
             workspace,
             internal,
             project: project_dir.to_path_buf(),
         };
+
+        session.init_session(project_dir, task).await?;
+        info!("session created: {}", session.workspace.display());
+        Ok(session)
+    }
+    async fn init_session(
+        &self,
+        project_dir: &Path,
+        task: Option<&str>,
+    ) -> Result<(), std::io::Error> {
+        tokio::fs::create_dir_all(self.internal.join("out")).await?;
+        tokio::fs::create_dir_all(self.internal.join("responses")).await?;
+
+        let symlink = self.workspace.join("work");
+        if !tokio::fs::try_exists(&symlink).await.unwrap_or(false) {
+            tokio::fs::symlink(project_dir, &symlink).await?;
+        }
+
+        tokio::fs::write(self.internal.join("system-prompt.txt"), SYSTEM_PROMPT).await?;
+        tokio::fs::write(self.internal.join("tick"), "0").await?;
 
         let tai_content = initial_tai_content(project_dir);
         let mut resp = parse_response(&tai_content);
@@ -94,10 +103,9 @@ impl SessionDir {
             && let Some(t) = read_task().await {
                 resp.task = t;
             }
-        session.write_tick_response(0, &resp).await;
+        self.write_tick_response(0, &resp).await;
 
-        info!("session created: {}", session.workspace.display());
-        Ok(session)
+        Ok(())
     }
 
     pub async fn open(path: &Path) -> Result<Self, std::io::Error> {
@@ -152,24 +160,7 @@ impl SessionDir {
                     internal: p.join(".session"),
                     project: project_dir.to_path_buf(),
                 };
-                tokio::fs::create_dir_all(session.internal.join("out")).await?;
-                tokio::fs::create_dir_all(session.internal.join("responses")).await?;
-                let symlink = session.workspace.join("work");
-                if !tokio::fs::try_exists(&symlink).await.unwrap_or(false) {
-                    tokio::fs::symlink(project_dir, &symlink).await?;
-                }
-                tokio::fs::write(session.internal.join("system-prompt.txt"), SYSTEM_PROMPT)
-                    .await?;
-                tokio::fs::write(session.internal.join("tick"), "0").await?;
-                let tai_content = initial_tai_content(project_dir);
-                let mut resp = parse_response(&tai_content);
-                if let Some(t) = task {
-                    resp.task = t.to_string();
-                } else if resp.task.is_empty()
-                    && let Some(t) = read_task().await {
-                        resp.task = t;
-                    }
-                session.write_tick_response(0, &resp).await;
+                session.init_session(project_dir, task).await?;
                 info!("session created at: {}", p.display());
                 Ok(session)
             }

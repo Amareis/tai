@@ -232,7 +232,7 @@ fn parse_action_word(line: &str, line_num: usize) -> Result<EditAction, EditErro
         "Change" => Ok(EditAction::Change),
         "Delete" => Ok(EditAction::Delete),
         "InsertBefore" => Ok(EditAction::InsertBefore),
-        "AppendAfter" => Ok(EditAction::AppendAfter),
+        "AppendAfter" | "InsertAfter" => Ok(EditAction::AppendAfter),
         other => Err(EditError::Parse {
             line: line_num,
             message: format!(
@@ -362,14 +362,20 @@ pub fn validate_texts_against_output(commands: &[EditCommand], output: &str) -> 
             && !output.contains(text) {
                 return Err(EditError::Parse {
                     line: 0,
-                    message: format!("line text not found in output: {text}"),
+                    message: format!(
+                        "start text for {} not found in file output: expected '{text}'",
+                        cmd.start
+                    ),
                 });
             }
         if let Some(ref text) = cmd.end_text
             && !output.contains(text) {
+                let end_ref = cmd.end.unwrap_or(cmd.start);
                 return Err(EditError::Parse {
                     line: 0,
-                    message: format!("line text not found in output: {text}"),
+                    message: format!(
+                        "end text for {end_ref} not found in file output: expected '{text}'"
+                    ),
                 });
             }
     }
