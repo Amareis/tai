@@ -8,7 +8,7 @@ pub struct CmdOutput {
     pub stdout: String,
 }
 
-const AWK: &str = r#"'{ if ($0 !~ /^[[:space:]]*$/) print "L" NR ": " $0 }'"#;
+const AWK: &str = r#"'{ if ($0 ~ /^[[:space:]]*$/) print "L" NR ";"; else print "L" NR ": " $0 }'"#;
 
 #[async_trait]
 pub trait Backend: Send + Sync {
