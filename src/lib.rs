@@ -28,12 +28,13 @@ pub async fn run_server(
     task: Option<&str>,
     debug: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let level = if debug { "tai=debug" } else { "tai=info" };
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("tai=info".parse()?))
+        .with_env_filter(EnvFilter::from_default_env().add_directive(level.parse()?))
         .init();
 
     let project_dir = env::current_dir()?;
-    let session = SessionDir::create_or_open(session_path, &project_dir, task, debug).await?;
+    let session = SessionDir::create_or_open(session_path, &project_dir, task).await?;
 
     let model = env::var("OPENAI_MODEL")?;
     let mut agent = Box::new(LlmAgent::new(model));

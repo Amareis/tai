@@ -105,6 +105,10 @@ impl Server {
 
             self.session.write_tick(state.tick_n).await;
 
+            if self.debug {
+                break;
+            }
+
             if state.is_complete() {
                 if !last_task.is_empty() {
                     println!("\n{last_task}");
@@ -126,8 +130,6 @@ impl Server {
         let tick_n = state.tick_n;
         info!("tick #{tick_n}: start");
 
-        self.debug_wait("before update_state").await;
-
         self.update_state(&mut state).await;
 
         info!(
@@ -138,8 +140,6 @@ impl Server {
         if state.is_complete() {
             return Ok(state);
         }
-
-        self.debug_wait("before agent call").await;
 
         let response = self.agent.step(&state).await?;
         info!(
@@ -319,13 +319,6 @@ impl Server {
         }
     }
 
-    async fn debug_wait(&self, point: &str) {
-        if !self.debug {
-            return;
-        }
-        println!("debug ({point}): press Enter to continue...");
-        read_line().await;
-    }
 }
 
 fn upsert_segment(segments: &mut Vec<ParsedBlock>, block: ParsedBlock) {

@@ -64,14 +64,9 @@ impl SessionDir {
     pub async fn create_new(
         project_dir: &Path,
         task: Option<&str>,
-        debug: bool,
     ) -> Result<Self, std::io::Error> {
         let id = generate_short_id();
-        let workspace = if debug {
-            project_dir.join("../../tai-prev").join(&id)
-        } else {
-            std::env::temp_dir().join(format!("tai-{id}"))
-        };
+        let workspace = std::env::temp_dir().join(format!("tai-{id}"));
 
         let internal = workspace.join(".session");
         tokio::fs::create_dir_all(internal.join("out")).await?;
@@ -141,7 +136,6 @@ impl SessionDir {
         path: Option<&Path>,
         project_dir: &Path,
         task: Option<&str>,
-        debug: bool,
     ) -> Result<Self, std::io::Error> {
         match path {
             Some(p)
@@ -179,7 +173,7 @@ impl SessionDir {
                 info!("session created at: {}", p.display());
                 Ok(session)
             }
-            None => Self::create_new(project_dir, task, debug).await,
+            None => Self::create_new(project_dir, task).await,
         }
     }
 
