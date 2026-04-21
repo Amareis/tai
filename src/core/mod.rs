@@ -84,7 +84,6 @@ impl Server {
                     if !matches!(e, CoreError::Interrupted) {
                         warn!("tick error: {}", e);
                     }
-                    self.session.print_banner();
                     break;
                 }
                 Ok(s) => state = s,
@@ -101,6 +100,7 @@ impl Server {
                 break;
             }
         }
+        self.session.print_banner();
 
         Ok(())
     }
