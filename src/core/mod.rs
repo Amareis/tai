@@ -4,6 +4,7 @@ use crate::response::edit_command;
 use crate::session::SessionDir;
 use crate::state::State;
 use crate::types::{BlockMode, ParsedBlock};
+use std::collections::HashMap;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, info, warn};
@@ -68,6 +69,7 @@ impl Server {
         loop {
             state.system = self.session.read_system_prompt().await;
 
+            let prev_state = state.clone();
             let result = {
                 let tick_fut = self.tick_tack(&mut state, Some(response));
                 tokio::pin!(tick_fut);
@@ -81,23 +83,24 @@ impl Server {
                 }
             };
 
+            // Persist output changes and current state
+            self.sync_outputs(&prev_state.outputs, &state.outputs).await;
+            self.commit_state(&state).await;
+
             match result {
                 Err(e) => {
-                    // Persist state since update_state already applied side effects
-                    self.session.write_index(&state.segments).await;
-                    self.session.write_tick(state.tick_n).await;
+                    // Persist state since apply_response already applied side effects
                     if !matches!(e, CoreError::Interrupted) {
                         warn!("tick error: {}", e);
                     }
                     if !state.task.is_empty() {
                         println!("\n{}", state.task);
                     }
+                    self.session.print_banner();
                     return Err(e);
                 }
                 Ok(None) => {
                     // Session completed
-                    self.session.write_index(&state.segments).await;
-                    self.session.write_tick(state.tick_n).await;
                     if !state.task.is_empty() {
                         println!("\n{}", state.task);
                     }
@@ -106,16 +109,14 @@ impl Server {
                 Ok(Some(new_response)) => {
                     response = new_response;
                     self.session.write_tick_response(state.tick_n, &response).await;
-                    self.session.write_index(&state.segments).await;
-                    self.session.write_tick(state.tick_n).await;
                 }
             }
 
             if self.debug {
+                self.session.print_banner();
                 break;
             }
         }
-        self.session.print_banner();
 
         Ok(())
     }
@@ -126,7 +127,7 @@ impl Server {
         resp: Option<AgentResponse>,
     ) -> Result<Option<AgentResponse>, CoreError> {
         let completed = if let Some(resp) = resp {
-            self.update_state(state, resp).await
+            self.apply_response(state, resp).await
         } else {
             state.is_completed
         };
@@ -154,7 +155,7 @@ impl Server {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn update_state(&self, state: &mut State, response: AgentResponse) -> bool {
+    async fn apply_response(&self, state: &mut State, response: AgentResponse) -> bool {
         if state.is_complete() {
             return true;
         }
@@ -190,7 +191,6 @@ impl Server {
         }
 
         for block in &close_blocks {
-            self.session.remove_out(&block.window).await;
             outputs.remove(&block.window);
             segments.retain(|s| s.window != block.window);
         }
@@ -202,7 +202,6 @@ impl Server {
                 exit_code: 0,
                 stdout: answer,
             };
-            self.session.write_out(&block.window, &output).await;
             outputs.insert(block.window.clone(), output);
             upsert_segment(segments, (*block).clone());
         }
@@ -210,7 +209,6 @@ impl Server {
         for block in &exec_blocks {
             debug!("execute: '{}' exec", block.window);
             let output = self.back.run(&block.window, &block.content).await;
-            self.session.write_out(&block.window, &output).await;
             outputs.insert(block.window.clone(), output);
             upsert_segment(segments, (*block).clone());
         }
@@ -221,8 +219,7 @@ impl Server {
                 "cat > {} << 'TAIWRITE'\n{}\nTAIWRITE",
                 block.window, block.content
             );
-            let output = self.back.run(&block.window, &cmd).await;
-            self.session.write_out(&block.window, &output).await;
+            let _output = self.back.run(&block.window, &cmd).await;
 
             let file_view = self.back.file(&block.window).await;
             outputs.insert(block.window.clone(), file_view);
@@ -231,8 +228,7 @@ impl Server {
             upsert_segment(segments, (*block).clone());
         }
 
-        let mut edit_groups: std::collections::HashMap<String, Vec<&ParsedBlock>> =
-            std::collections::HashMap::new();
+        let mut edit_groups: HashMap<String, Vec<&ParsedBlock>> = HashMap::new();
         for block in &edit_blocks {
             edit_groups
                 .entry(block.window.clone())
@@ -272,7 +268,6 @@ impl Server {
                     exit_code: 1,
                     stdout: format!("edit error: {e}"),
                 };
-                self.session.write_out(path, &output).await;
                 outputs.insert(path.clone(), output);
                 continue;
             }
@@ -285,8 +280,7 @@ impl Server {
             let script = edit_command::build_ex_script(path, &all_commands);
             debug!("execute: '{}' edit script: {}", path, script);
 
-            let output = self.back.run(path, &script).await;
-            self.session.write_out(path, &output).await;
+            let _output = self.back.run(path, &script).await;
 
             let file_view = self.back.file(path).await;
             outputs.insert(path.clone(), file_view);
@@ -313,13 +307,34 @@ impl Server {
                 } else {
                     self.back.run(&block.window, &block.content).await
                 };
-                self.session.write_out(&block.window, &output).await;
                 outputs.insert(block.window.clone(), output);
             }
         }
 
         state.is_completed = response.complete;
         state.is_completed
+    }
+
+    async fn sync_outputs(
+        &self,
+        old: &HashMap<String, crate::backend::CmdOutput>,
+        new: &HashMap<String, crate::backend::CmdOutput>,
+    ) {
+        for key in old.keys() {
+            if !new.contains_key(key) {
+                self.session.remove_out(key).await;
+            }
+        }
+        for (key, val) in new {
+            if old.get(key) != Some(val) {
+                self.session.write_out(key, val).await;
+            }
+        }
+    }
+
+    async fn commit_state(&self, state: &State) {
+        self.session.write_index(&state.segments).await;
+        self.session.write_tick(state.tick_n).await;
     }
 }
 

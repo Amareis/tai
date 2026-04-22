@@ -2,7 +2,7 @@ pub mod local;
 
 use async_trait::async_trait;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CmdOutput {
     pub exit_code: i32,
     pub stdout: String,
