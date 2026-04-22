@@ -69,7 +69,7 @@ impl Server {
             state.system = self.session.read_system_prompt().await;
 
             let result = {
-                let tick_fut = self.tick_tack(&mut state, response);
+                let tick_fut = self.tick_tack(&mut state, Some(response));
                 tokio::pin!(tick_fut);
 
                 tokio::select! {
@@ -123,9 +123,13 @@ impl Server {
     pub async fn tick_tack(
         &mut self,
         state: &mut State,
-        resp: AgentResponse,
+        resp: Option<AgentResponse>,
     ) -> Result<Option<AgentResponse>, CoreError> {
-        let completed = self.update_state(state, resp).await;
+        let completed = if let Some(resp) = resp {
+            self.update_state(state, resp).await
+        } else {
+            state.is_completed
+        };
 
         let tick_n = state.tick_n;
         if completed {
@@ -212,8 +216,6 @@ impl Server {
         }
 
         for block in &write_blocks {
-            self.session.remove_out(&block.window).await;
-            outputs.remove(&block.window);
             debug!("execute: '{}' write", block.window);
             let cmd = format!(
                 "cat > {} << 'TAIWRITE'\n{}\nTAIWRITE",
@@ -240,8 +242,6 @@ impl Server {
 
         for (path, blocks) in &edit_groups {
             let prev_output = outputs.get(path).cloned();
-            self.session.remove_out(path).await;
-            outputs.remove(path);
 
             let mut all_commands = Vec::new();
             let mut edit_err: Option<edit_command::EditError> = None;

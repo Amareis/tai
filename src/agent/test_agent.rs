@@ -54,12 +54,13 @@ impl TestAgent {
 #[async_trait]
 impl Agent for TestAgent {
     async fn step(&self, state: &State) -> Result<AgentResponse, AgentError> {
-        let idx = self.current.fetch_add(1, Ordering::SeqCst);
+        let idx = self.current.load(Ordering::SeqCst);
         let step = self
             .steps
             .get(idx)
             .ok_or_else(|| AgentError::Api(format!("no test step at index {idx}")))?;
 
+        self.current.fetch_add(1, Ordering::SeqCst);
         (step.check)(state);
 
         Ok(step.response.clone())
