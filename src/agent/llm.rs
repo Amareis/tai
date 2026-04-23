@@ -275,20 +275,31 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
     let mut ms: Vec<ChatCompletionRequestMessage> =
         vec![ChatCompletionRequestSystemMessage::from(state.system.clone()).into()];
 
-    let mut body = String::new();
     let (regular, dashboard): (Vec<_>, Vec<_>) =
         state.segments.iter().partition(|s| !s.dashboard);
 
-    write_blocks(&mut body, &regular, state);
+    for segment in regular {
+        let agent_text = crate::response::serialize_blocks(std::slice::from_ref(segment));
+        if !agent_text.trim().is_empty() {
+            ms.push(ChatCompletionRequestAssistantMessage::from(agent_text).into());
+        }
+        ms.push(build_user_window_message(segment, state));
+    }
 
-    write_blocks(&mut body, &dashboard, state);
+    for segment in dashboard {
+        let agent_text = crate::response::serialize_blocks(std::slice::from_ref(segment));
+        if !agent_text.trim().is_empty() {
+            ms.push(ChatCompletionRequestAssistantMessage::from(agent_text).into());
+        }
+        ms.push(build_user_window_message(segment, state));
+    }
 
+    let mut body = String::new();
     if !state.task.is_empty() {
         body.push_str("## Task\n");
         body.push_str(&state.task);
         body.push_str("\n\n");
     }
-
     body.push_str(&render_window_summary(state));
     body.push_str("\n\n");
     body.push_str(&state.instructions);
@@ -297,21 +308,21 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
     ms
 }
 
-fn write_blocks(to: &mut impl Write, segments: &[&ParsedBlock], state: &State) {
-    for segment in segments {
-        writeln!(to, "## [{}]", segment.window).ok();
-        if let Some(output) = state.outputs.get(&segment.window) {
-            if !output.stdout.is_empty() {
-                write!(to, "{}", output.stdout).ok();
-                if !output.stdout.ends_with('\n') {
-                    writeln!(to).ok();
-                }
+fn build_user_window_message(segment: &ParsedBlock, state: &State) -> ChatCompletionRequestMessage {
+    let mut text = String::new();
+    writeln!(text, "## [{}]", segment.window).ok();
+    if let Some(output) = state.outputs.get(&segment.window) {
+        if !output.stdout.is_empty() {
+            write!(text, "{}", output.stdout).ok();
+            if !output.stdout.ends_with('\n') {
+                writeln!(text).ok();
             }
-            write!(to, "exit {}\n\n", output.exit_code).ok();
-        } else {
-            writeln!(to, "UNKNOWN OUTPUT\n").ok();
         }
+        write!(text, "exit {}\n\n", output.exit_code).ok();
+    } else {
+        writeln!(text, "UNKNOWN OUTPUT\n").ok();
     }
+    ChatCompletionRequestUserMessage::from(text).into()
 }
 
 fn estimate_tokens(text: &str) -> usize {
