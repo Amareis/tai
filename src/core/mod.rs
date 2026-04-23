@@ -92,6 +92,7 @@ impl Server {
             // Persist output changes and current state
             self.sync_outputs(&prev_state.outputs, &state.outputs).await;
             self.commit_state(&state).await;
+            self.write_step(&state).await;
 
             match result {
                 Err(e) => {
@@ -395,6 +396,37 @@ impl Server {
     async fn commit_state(&self, state: &State) {
         self.session.write_index(&state.segments).await;
         self.session.write_tick(state.tick_n).await;
+    }
+
+    async fn write_step(&self, state: &State) {
+        let steps_dir = self.session.internal_path().join("steps");
+        if let Err(e) = tokio::fs::create_dir_all(&steps_dir).await {
+            warn!("failed to create steps dir: {e}");
+            return;
+        }
+        let path = steps_dir.join(format!("{}.md", state.tick_n));
+
+        let mut text = format!("# Tick {}\n\n", state.tick_n);
+        let _ = write!(text, "## Task\n\n{}\n\n", state.task);
+        let _ = write!(text, "## Completed\n\n{}\n\n", state.is_completed);
+        text.push_str("## Segments\n\n");
+        for seg in &state.segments {
+            let _ = writeln!(text, "- `{}` (mode: `{}`)", seg.window, seg.mode);
+        }
+        text.push_str("\n## Outputs\n\n");
+        for (key, out) in &state.outputs {
+            let preview: String = out.stdout.chars().take(200).collect();
+            let _ = write!(
+                text,
+                "- `{key}`: exit {} ({} chars)\n```\n{preview}\n```\n",
+                out.exit_code,
+                out.stdout.len(),
+            );
+        }
+
+        if let Err(e) = tokio::fs::write(&path, text).await {
+            warn!("failed to write step file: {e}");
+        }
     }
 }
 

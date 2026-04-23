@@ -239,6 +239,11 @@ impl SessionDir {
     }
 
     #[must_use]
+    pub fn internal_path(&self) -> &Path {
+        &self.internal
+    }
+
+    #[must_use]
     pub fn project(&self) -> &Path {
         &self.project
     }

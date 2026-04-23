@@ -12,6 +12,7 @@ use crate::session::SessionDir;
 use std::env;
 use std::path::Path;
 use tracing::error;
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 pub fn create_server(
@@ -31,15 +32,40 @@ pub async fn run_server(
     tui: bool,
     no_delegate: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if tui {
-        let level = if debug { "tai=debug" } else { "tai=info" };
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env().add_directive(level.parse()?))
-            .init();
-    }
-
     let project_dir = env::current_dir()?;
     let session = SessionDir::create_or_open(session_path, &project_dir, task).await?;
+
+    let level = if debug { "tai=debug" } else { "tai=info" };
+    let filter = EnvFilter::from_default_env().add_directive(level.parse()?);
+    let log_path = session.internal_path().join("tai.log");
+    let log_path_clone = log_path.clone();
+    let file_writer = move || -> Box<dyn std::io::Write + Send> {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path_clone)
+        {
+            Ok(f) => Box::new(f),
+            Err(_) => Box::new(std::io::sink()),
+        }
+    };
+    if tui {
+        let stdout_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stdout);
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(file_writer)
+            .with_ansi(false);
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stdout_layer)
+            .with(file_layer)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(file_writer)
+            .with_ansi(false)
+            .init();
+    }
 
     let model = env::var("OPENAI_MODEL")?;
     let mut agent = Box::new(LlmAgent::new(model));
