@@ -290,6 +290,8 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
     }
 
     body.push_str(&render_window_summary(state));
+    body.push_str("\n\n");
+    body.push_str(&state.instructions);
 
     ms.push(ChatCompletionRequestUserMessage::from(body).into());
     ms
@@ -319,6 +321,7 @@ fn estimate_tokens(text: &str) -> usize {
 fn render_window_summary(state: &State) -> String {
     let mut body = String::from("== Windows ==\n");
     let mut total_tokens: usize = estimate_tokens(&state.system);
+    total_tokens += estimate_tokens(&state.instructions);
     if !state.task.is_empty() {
         total_tokens += estimate_tokens(&state.task);
     }

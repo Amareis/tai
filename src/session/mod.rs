@@ -10,6 +10,7 @@ use tracing::info;
 use uuid::Uuid;
 
 const SYSTEM_PROMPT: &str = include_str!("system_prompt.txt");
+const INSTRUCTIONS: &str = include_str!("instructions.txt");
 const DEFAULT_TAI: &str = include_str!("default_tai.md");
 
 fn initial_tai_content(project_dir: &Path) -> String {
@@ -93,6 +94,7 @@ impl SessionDir {
         }
 
         tokio::fs::write(self.internal.join("system-prompt.txt"), SYSTEM_PROMPT).await?;
+        tokio::fs::write(self.internal.join("instructions.txt"), INSTRUCTIONS).await?;
         tokio::fs::write(self.internal.join("tick"), "0").await?;
 
         let tai_content = initial_tai_content(project_dir);
@@ -226,6 +228,13 @@ impl SessionDir {
         tokio::fs::read_to_string(&path)
             .await
             .unwrap_or_else(|_| SYSTEM_PROMPT.to_string())
+    }
+
+    pub async fn read_instructions(&self) -> String {
+        let path = self.internal.join("instructions.txt");
+        tokio::fs::read_to_string(&path)
+            .await
+            .unwrap_or_else(|_| INSTRUCTIONS.to_string())
     }
 
     #[must_use]

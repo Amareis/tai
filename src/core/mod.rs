@@ -56,6 +56,7 @@ impl Server {
             let segments = self.session.read_index().await;
             let outputs = self.session.read_all_outputs(&segments).await;
             let system = self.session.read_system_prompt().await;
+            let instructions = self.session.read_instructions().await;
             let tick = self.session.read_tick(0).await;
             let response = self
                 .session
@@ -63,7 +64,7 @@ impl Server {
                 .await
                 .unwrap_or_default();
 
-            let mut state = State::build(system, segments, outputs, tick);
+            let mut state = State::build(system, instructions, segments, outputs, tick);
             state.task.clone_from(&response.task);
             (state, response)
         };
@@ -75,6 +76,7 @@ impl Server {
 
         loop {
             state.system = self.session.read_system_prompt().await;
+            state.instructions = self.session.read_instructions().await;
 
             let prev_state = state.clone();
             let result = {
