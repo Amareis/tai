@@ -14,12 +14,12 @@ use futures_util::stream::StreamExt;
 use serde_json::Value;
 use std::fmt::Write;
 use std::pin::Pin;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 pub struct LlmAgent {
     model: String,
     client: Client<OpenAIConfig>,
-    pub debug: bool,
+    pub tui: bool,
 }
 
 fn check_edit_violations(
@@ -57,7 +57,7 @@ impl LlmAgent {
         Self {
             model,
             client: Client::default(),
-            debug: false,
+            tui: false,
         }
     }
 }
@@ -192,11 +192,6 @@ impl Agent for LlmAgent {
             return Err(AgentError::InvalidResponse(all_violations));
         }
 
-        if self.debug {
-            let s = toml::to_string_pretty(&resp).unwrap_or_else(|e| e.to_string());
-            debug!("Response: {s}");
-        }
-
         Ok(resp)
     }
 }
@@ -213,11 +208,6 @@ impl LlmAgent {
             .messages(messages.to_vec())
             .stream(true)
             .build()?;
-
-        if self.debug {
-            let s = toml::to_string(&request).unwrap_or_else(|e| e.to_string());
-            info!("Send request: {s}");
-        }
 
         info!("llm: creating stream...");
         let mut stream: MyStreamingType = match self.client.chat().create_stream_byot(request).await
@@ -240,7 +230,9 @@ impl LlmAgent {
                         && !content.is_empty()
                     {
                         thinks = true;
-                        print!("{content}");
+                        if self.tui {
+                            print!("{content}");
+                        }
                         reasoning.push_str(content);
                     }
 
@@ -249,9 +241,13 @@ impl LlmAgent {
                     {
                         if thinks {
                             thinks = false;
-                            println!("\n\nTHINK END\n");
+                            if self.tui {
+                                println!("\n\nTHINK END\n");
+                            }
                         }
-                        print!("{content}");
+                        if self.tui {
+                            print!("{content}");
+                        }
                         text.push_str(content);
                     }
                 }
@@ -260,7 +256,9 @@ impl LlmAgent {
                 }
             }
         }
-        println!("\nDONE");
+        if self.tui {
+            println!("\nDONE");
+        }
 
         info!(
             "llm: stream complete, text {} bytes, reasoning {} bytes",

@@ -27,20 +27,28 @@ pub async fn run_server(
     session_path: Option<&Path>,
     task: Option<&str>,
     debug: bool,
+    max_ticks: Option<u64>,
+    tui: bool,
+    no_delegate: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let level = if debug { "tai=debug" } else { "tai=info" };
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(level.parse()?))
-        .init();
+    if tui {
+        let level = if debug { "tai=debug" } else { "tai=info" };
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::from_default_env().add_directive(level.parse()?))
+            .init();
+    }
 
     let project_dir = env::current_dir()?;
     let session = SessionDir::create_or_open(session_path, &project_dir, task).await?;
 
     let model = env::var("OPENAI_MODEL")?;
     let mut agent = Box::new(LlmAgent::new(model));
-    agent.debug = debug;
+    agent.tui = tui;
     let mut server = create_server(session, agent)?;
     server.debug = debug;
+    server.max_ticks = max_ticks;
+    server.tui = tui;
+    server.no_delegate = no_delegate;
 
     if let Err(e) = server.run().await {
         error!("Server run error: {}", e);

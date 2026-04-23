@@ -46,7 +46,7 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                     format_args!("```{}:{}\n```\n", prefix, block.window),
                 );
             }
-            BlockMode::Watch | BlockMode::Exec | BlockMode::Ask => {
+            BlockMode::Watch | BlockMode::Exec | BlockMode::Ask | BlockMode::Delegate => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
                     format_args!("```{}:{}\n{}\n```\n", prefix, block.window, block.content),

@@ -272,7 +272,7 @@ impl SessionDir {
     pub async fn write_tick_response(&self, tick_n: u64, response: &AgentResponse) {
         let dir = self.internal.join("responses");
         tokio::fs::create_dir_all(&dir).await.ok();
-        let path = dir.join(format!("{tick_n:->5}.toml"));
+        let path = dir.join(format!("{tick_n:0>5}.toml"));
         tokio::fs::write(
             &path,
             toml::to_string(response).unwrap_or_else(|e| e.to_string()),
@@ -285,7 +285,7 @@ impl SessionDir {
         let path = self
             .internal
             .join("responses")
-            .join(format!("{tick_n:->5}.toml"));
+            .join(format!("{tick_n:0>5}.toml"));
         toml::from_str(&tokio::fs::read_to_string(path).await.ok()?).ok()
     }
 

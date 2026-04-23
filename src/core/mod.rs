@@ -5,6 +5,7 @@ use crate::session::SessionDir;
 use crate::state::State;
 use crate::types::{BlockMode, ParsedBlock};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, info, warn};
@@ -29,6 +30,9 @@ pub struct Server {
     back: Box<dyn Backend>,
     pub agent: Box<dyn Agent>,
     pub debug: bool,
+    pub max_ticks: Option<u64>,
+    pub tui: bool,
+    pub no_delegate: bool,
 }
 
 impl Server {
@@ -39,6 +43,9 @@ impl Server {
             back,
             agent,
             debug: false,
+            max_ticks: None,
+            tui: false,
+            no_delegate: false,
         }
     }
 
@@ -72,10 +79,9 @@ impl Server {
             let prev_state = state.clone();
             let result = {
                 let tick_fut = self.tick_tack(&mut state, Some(response));
-                tokio::pin!(tick_fut);
 
                 tokio::select! {
-                    res = &mut tick_fut => res,
+                    res = tick_fut => res,
                     _ = tokio::signal::ctrl_c() => {
                         info!("run: ctrl+c received, exiting");
                         Err(CoreError::Interrupted)
@@ -96,7 +102,9 @@ impl Server {
                     if !state.task.is_empty() {
                         println!("\n{}", state.task);
                     }
-                    self.session.print_banner();
+                    if self.tui {
+                        self.session.print_banner();
+                    }
                     return Err(e);
                 }
                 Ok(None) => {
@@ -108,12 +116,22 @@ impl Server {
                 }
                 Ok(Some(new_response)) => {
                     response = new_response;
-                    self.session.write_tick_response(state.tick_n, &response).await;
+                    self.session
+                        .write_tick_response(state.tick_n, &response)
+                        .await;
                 }
             }
 
+            if let Some(max) = self.max_ticks
+                && state.tick_n >= max
+            {
+                break;
+            }
+
             if self.debug {
-                self.session.print_banner();
+                if self.tui {
+                    self.session.print_banner();
+                }
                 break;
             }
         }
@@ -164,7 +182,10 @@ impl Server {
         state.task.clone_from(&response.task);
 
         let State {
-            outputs, segments, tick_n, ..
+            outputs,
+            segments,
+            tick_n,
+            ..
         } = state;
 
         info!("tick #{tick_n}: start");
@@ -176,6 +197,7 @@ impl Server {
         let mut file_blocks: Vec<&ParsedBlock> = Vec::new();
         let mut write_blocks: Vec<&ParsedBlock> = Vec::new();
         let mut edit_blocks: Vec<&ParsedBlock> = Vec::new();
+        let mut delegate_blocks: Vec<&ParsedBlock> = Vec::new();
 
         for block in &response.segments {
             match block.mode {
@@ -186,6 +208,7 @@ impl Server {
                 BlockMode::File => file_blocks.push(block),
                 BlockMode::Write => write_blocks.push(block),
                 BlockMode::Edit(_) => edit_blocks.push(block),
+                BlockMode::Delegate => delegate_blocks.push(block),
                 BlockMode::Task => {}
             }
         }
@@ -253,7 +276,7 @@ impl Server {
                     }
                     if let Some(ref out) = prev_output
                         && let Err(e) =
-                        edit_command::validate_texts_against_output(cmds, &out.stdout)
+                            edit_command::validate_texts_against_output(cmds, &out.stdout)
                     {
                         edit_err = Some(e);
                         break;
@@ -289,6 +312,43 @@ impl Server {
             if let Some(first) = blocks.first() {
                 upsert_segment(segments, (*first).clone());
             }
+        }
+        for block in &delegate_blocks {
+            if outputs.contains_key(&block.window) {
+                debug!("delegate: '{}' cached", block.window);
+                continue;
+            }
+            if self.no_delegate {
+                outputs.insert(
+                    block.window.clone(),
+                    crate::backend::CmdOutput {
+                        exit_code: 1,
+                        stdout: "delegate disabled".to_string(),
+                    },
+                );
+                upsert_segment(segments, (*block).clone());
+                continue;
+            }
+            debug!("delegate: '{}' starting", block.window);
+            let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("tai"));
+            let child_path = self
+                .session
+                .session_path()
+                .join("delegates")
+                .join(&block.window);
+            let mut cmd = format!(
+                "{} --session {}",
+                shell_escape(&exe.to_string_lossy()),
+                shell_escape(&child_path.to_string_lossy()),
+            );
+            if let Some(max) = self.max_ticks {
+                let _ = write!(cmd, " --max-ticks {max}");
+            }
+            let _ = write!(cmd, " --no-delegate");
+            let _ = write!(cmd, " <<'TAIEOF'\n{}\nTAIEOF", block.content);
+            let output = self.back.run(&block.window, &cmd).await;
+            outputs.insert(block.window.clone(), output);
+            upsert_segment(segments, (*block).clone());
         }
 
         for block in file_blocks {
@@ -372,4 +432,8 @@ async fn read_line() -> String {
         .await
         .unwrap_or_else(|e| Some(e.to_string()))
         .unwrap_or_else(|| "NONE".to_string())
+}
+
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\"'\"'"))
 }

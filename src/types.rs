@@ -10,6 +10,7 @@ pub enum BlockMode {
     Edit(Vec<crate::response::edit_command::EditCommand>),
     Write,
     Task,
+    Delegate,
 }
 
 impl std::str::FromStr for BlockMode {
@@ -25,6 +26,7 @@ impl std::str::FromStr for BlockMode {
             "edit" => Ok(Self::Edit(Vec::new())),
             "write" => Ok(Self::Write),
             "task" => Ok(Self::Task),
+            "delegate" => Ok(Self::Delegate),
             _ => Err(format!("unknown block mode: {s}")),
         }
     }
@@ -38,7 +40,7 @@ impl BlockMode {
 
     #[must_use]
     pub fn is_terminal(self) -> bool {
-        matches!(self, BlockMode::Close | BlockMode::Task)
+        matches!(self, BlockMode::Close | BlockMode::Task | BlockMode::Delegate)
     }
 }
 
@@ -53,6 +55,7 @@ impl std::fmt::Display for BlockMode {
             BlockMode::Edit(_) => f.write_str("edit"),
             BlockMode::Write => f.write_str("write"),
             BlockMode::Task => f.write_str("task"),
+            BlockMode::Delegate => f.write_str("delegate"),
         }
     }
 }
