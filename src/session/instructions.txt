@@ -71,6 +71,15 @@ Add `.dashboard` to the mode to mark a window as a dashboard window, like `watch
 
 Each title is unique. Sending a new block with an existing title replaces it.
 
+### Project Directory
+
+Your session workspace contains a symlink `work` pointing to the project root. When viewing project files or running project commands, always use the `work/` prefix:
+
+- **file blocks**: `file:work/src/main.rs`
+- **exec/watch blocks**: `cd work && cargo test`
+
+Do not use absolute paths.
+
 ## Writing Files
 
 Write blocks MUST use heredoc syntax to avoid conflicts with ``` in content:
