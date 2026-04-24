@@ -19,7 +19,7 @@ pub fn create_server(
     session: SessionDir,
     agent: Box<dyn Agent>,
 ) -> Result<Server, Box<dyn std::error::Error>> {
-    let cwd = session.workspace().to_path_buf();
+    let cwd = session.project().to_path_buf();
     let back = Box::new(backend::local::LocalBackend::new(cwd));
     Ok(Server::new(session, back, agent))
 }

@@ -471,3 +471,114 @@ async fn read_line() -> String {
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ParsedBlock;
+    use crate::types::BlockMode;
+
+    fn make_block(window: &str, mode: BlockMode) -> ParsedBlock {
+        ParsedBlock {
+            window: window.to_string(),
+            mode,
+            content: String::new(),
+            prose: None,
+            dashboard: false,
+        }
+    }
+
+    #[test]
+    fn test_upsert_segment_new() {
+        let mut segments = vec![];
+        upsert_segment(&mut segments, make_block("win1", BlockMode::Watch));
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].window, "win1");
+    }
+
+    #[test]
+    fn test_upsert_segment_replace() {
+        let mut segments = vec![make_block("win1", BlockMode::Watch)];
+        let replacement = ParsedBlock {
+            window: "win1".to_string(),
+            mode: BlockMode::Exec,
+            content: "new content".to_string(),
+            prose: Some("updated".to_string()),
+            dashboard: true,
+        };
+        upsert_segment(&mut segments, replacement);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].content, "new content");
+        assert_eq!(segments[0].mode, BlockMode::Exec);
+    }
+
+    #[test]
+    fn test_upsert_segment_multiple() {
+        let mut segments = vec![
+            make_block("a", BlockMode::Watch),
+            make_block("b", BlockMode::Exec),
+        ];
+        upsert_segment(&mut segments, make_block("c", BlockMode::File));
+        assert_eq!(segments.len(), 3);
+        upsert_segment(&mut segments, ParsedBlock {
+            window: "b".to_string(),
+            mode: BlockMode::Close,
+            content: String::new(),
+            prose: None,
+            dashboard: false,
+        });
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[1].mode, BlockMode::Close);
+    }
+
+    #[test]
+    fn test_move_to_end_existing() {
+        let mut segments = vec![
+            make_block("a", BlockMode::Watch),
+            make_block("b", BlockMode::Exec),
+            make_block("c", BlockMode::File),
+        ];
+        move_to_end(&mut segments, "b");
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0].window, "a");
+        assert_eq!(segments[1].window, "c");
+        assert_eq!(segments[2].window, "b");
+    }
+
+    #[test]
+    fn test_move_to_end_not_found() {
+        let mut segments = vec![
+            make_block("a", BlockMode::Watch),
+            make_block("b", BlockMode::Exec),
+        ];
+        move_to_end(&mut segments, "z");
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].window, "a");
+        assert_eq!(segments[1].window, "b");
+    }
+
+    #[test]
+    fn test_shell_escape_no_special() {
+        assert_eq!(shell_escape("hello"), "'hello'");
+    }
+
+    #[test]
+    fn test_shell_escape_with_single_quote() {
+        assert_eq!(shell_escape("it's"), "'it'\"'\"'s'");
+    }
+
+    #[test]
+    fn test_shell_escape_empty() {
+        assert_eq!(shell_escape(""), "''");
+    }
+
+    #[test]
+    fn test_shell_escape_path() {
+        assert_eq!(shell_escape("/usr/bin/tai"), "'/usr/bin/tai'");
+    }
+
+    #[test]
+    fn test_shell_escape_multiple_quotes() {
+        assert_eq!(shell_escape("a'b'c"), "'a'\"'\"'b'\"'\"'c'");
+    }
+}

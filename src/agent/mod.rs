@@ -143,3 +143,127 @@ pub struct TestStep {
     check: Box<dyn Fn(&State) + Send + Sync>,
     response: AgentResponse,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_agent_response_new() {
+        let resp = AgentResponse::new();
+        assert!(resp.reasoning.is_empty());
+        assert!(resp.segments.is_empty());
+        assert!(resp.task.is_empty());
+        assert!(!resp.complete);
+        assert!(resp.heredoc_violations.is_empty());
+        assert!(resp.edit_parse_errors.is_empty());
+    }
+
+    #[test]
+    fn test_agent_response_block_watch() {
+        let resp = AgentResponse::block("build", BlockMode::Watch, "cargo build");
+        assert!(resp.reasoning.is_empty());
+        assert_eq!(resp.segments.len(), 1);
+        assert_eq!(resp.segments[0].window, "build");
+        assert_eq!(resp.segments[0].mode, BlockMode::Watch);
+        assert_eq!(resp.segments[0].content, "cargo build");
+        assert!(resp.task.is_empty());
+        assert!(!resp.complete);
+    }
+
+    #[test]
+    fn test_agent_response_block_edit_parses_commands() {
+        let resp = AgentResponse::block(
+            "src/main.rs",
+            BlockMode::Edit(Vec::new()),
+            "Change Exactly L1:old text\nnew text\n.\n",
+        );
+        assert_eq!(resp.segments.len(), 1);
+        if let BlockMode::Edit(ref cmds) = resp.segments[0].mode {
+            assert!(!cmds.is_empty(), "edit commands should be parsed from content");
+        } else {
+            panic!("expected Edit mode");
+        }
+    }
+
+    #[test]
+    fn test_agent_response_block_non_edit() {
+        let resp = AgentResponse::block("test", BlockMode::Exec, "cargo test");
+        assert_eq!(resp.segments[0].mode, BlockMode::Exec);
+        assert_eq!(resp.segments[0].content, "cargo test");
+    }
+
+    #[test]
+    fn test_agent_response_and() {
+        let a = AgentResponse::block("build", BlockMode::Watch, "cargo build");
+        let b = AgentResponse::block("test", BlockMode::Exec, "cargo test");
+        let combined = a.and(b);
+        assert_eq!(combined.segments.len(), 2);
+        assert_eq!(combined.segments[0].window, "build");
+        assert_eq!(combined.segments[1].window, "test");
+    }
+
+    #[test]
+    fn test_agent_response_with_reasoning() {
+        let resp = AgentResponse::new().with_reasoning("I need to fix this");
+        assert_eq!(resp.reasoning, "I need to fix this");
+    }
+
+    #[test]
+    fn test_agent_response_with_task() {
+        let resp = AgentResponse::new().with_task("Refactor the module");
+        assert_eq!(resp.task, "Refactor the module");
+    }
+
+    #[test]
+    fn test_agent_response_chained_builders() {
+        let resp = AgentResponse::block("build", BlockMode::Watch, "cargo build")
+            .with_reasoning("checking build")
+            .with_task("Fix build errors");
+        assert_eq!(resp.reasoning, "checking build");
+        assert_eq!(resp.task, "Fix build errors");
+        assert_eq!(resp.segments.len(), 1);
+    }
+
+    #[test]
+    fn test_mock_agent_returns_responses_in_order() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let a = AgentResponse::block("a", BlockMode::Watch, "cmd a");
+        let b = AgentResponse::block("b", BlockMode::Exec, "cmd b");
+        let agent = MockAgent::new(vec![a.clone(), b.clone()]);
+        let state = State::default();
+        let r1 = rt.block_on(agent.step(&state)).unwrap();
+        let r2 = rt.block_on(agent.step(&state)).unwrap();
+        assert_eq!(r1.segments[0].window, "a");
+        assert_eq!(r2.segments[0].window, "b");
+    }
+
+    #[test]
+    fn test_mock_agent_exhausted_returns_error() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let agent = MockAgent::new(vec![]);
+        let state = State::default();
+        let result = rt.block_on(agent.step(&state));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mock_agent_single() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let resp = AgentResponse::block("x", BlockMode::Watch, "cmd x");
+        let agent = MockAgent::single(resp.clone());
+        let state = State::default();
+        let result = rt.block_on(agent.step(&state)).unwrap();
+        assert_eq!(result.segments[0].window, "x");
+    }
+
+    #[test]
+    fn test_nop_agent() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let agent = NopAgent;
+        let state = State::default();
+        let result = rt.block_on(agent.step(&state)).unwrap();
+        assert!(result.segments.is_empty());
+        assert!(result.task.is_empty());
+    }
+}
