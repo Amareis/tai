@@ -43,20 +43,20 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
             BlockMode::Close | BlockMode::File => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```{}:{}\n```\n", prefix, block.window),
+                    format_args!("```\n{}:{}\n```\n", prefix, block.window),
                 );
             }
             BlockMode::Watch | BlockMode::Exec | BlockMode::Ask | BlockMode::Delegate => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```{}:{}\n{}\n```\n", prefix, block.window, block.content),
+                    format_args!("```\n{}:{}\n{}\n```\n", prefix, block.window, block.content),
                 );
             }
             BlockMode::Write => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
                     format_args!(
-                        "```{}:{}\n<<'TAIDELIM'\n{}\nTAIDELIM\n```\n",
+                        "```\n{}:{}\n<<'TAIDELIM'\n{}\nTAIDELIM\n```\n",
                         prefix, block.window, block.content
                     ),
                 );
@@ -70,7 +70,7 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
                     format_args!(
-                        "```{}:{}\n{}\n```\n",
+                        "```\n{}:{}\n{}\n```\n",
                         prefix, block.window, content
                     ),
                 );
@@ -78,7 +78,7 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
             BlockMode::Task => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
-                    format_args!("```task\n{}\n```\n", block.content),
+                    format_args!("```\ntask\n{}\n```\n", block.content),
                 );
             }
         }
@@ -199,7 +199,10 @@ fn parse_response_segments(input: &str) -> Vec<ParsedSegment> {
                     segments.push(ParsedSegment::Prose(prose.to_string()));
                 }
             }
-            let header_start = block_start + 3;
+            let mut header_start = block_start + 3;
+            if input.get(header_start..header_start + 1) == Some("\n") {
+                header_start += 1;
+            }
             let (header_end, hdr_opt) = parse_header(input, header_start);
 
             let (_body_end, close_end, content) = parse_block_body(input, header_end);
@@ -394,7 +397,8 @@ mod tests {
 
     #[test]
     fn test_parse_single_watch_block() {
-        let text = "Before\n```watch:build\ncargo build\n```\nAfter";
+        let text = "Before\n```
+watch:build\ncargo build\n```\nAfter";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 3);
         assert!(matches!(&segments[0], ParsedSegment::Prose(_)));
@@ -408,7 +412,8 @@ mod tests {
 
     #[test]
     fn test_parse_close_mode() {
-        let text = "```close:build\n```";
+        let text = "```
+close:build\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -420,14 +425,17 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_blocks() {
-        let text = "```watch:1\necho hello\n```\n```watch:2\necho world\n```";
+        let text = "```
+watch:1\necho hello\n```\n```
+watch:2\necho world\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
     }
 
     #[test]
     fn test_parse_heredoc_inside_block() {
-        let text = "```watch:build\ncat > config.yaml << 'EOF'\nserver:\n  port: 8080\n  note: \"``` not a closer\"\nEOF\n```";
+        let text = "```
+watch:build\ncat > config.yaml << 'EOF'\nserver:\n  port: 8080\n  note: \"``` not a closer\"\nEOF\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -439,7 +447,8 @@ mod tests {
 
     #[test]
     fn test_parse_unquoted_heredoc() {
-        let text = "```watch:build\ncat > file << DELIM\ncontent with ``` inside\nDELIM\n```";
+        let text = "```
+watch:build\ncat > file << DELIM\ncontent with ``` inside\nDELIM\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -461,7 +470,8 @@ mod tests {
 
     #[test]
     fn test_parse_unclosed_block() {
-        let text = "```watch:build\ncargo build";
+        let text = "```
+watch:build\ncargo build";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -537,7 +547,8 @@ mod tests {
 
     #[test]
     fn test_inline_block_open() {
-        let text = "Here we go:```watch:build\ncargo build\n```";
+        let text = "Here we go:```
+watch:build\ncargo build\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
         assert!(matches!(
@@ -548,7 +559,8 @@ mod tests {
 
     #[test]
     fn test_inline_block_close() {
-        let text = "```watch:build\necho done```";
+        let text = "```
+watch:build\necho done```";
         let segments = parse_response_segments(text);
         assert!(!segments.is_empty());
         assert!(matches!(
@@ -560,21 +572,26 @@ mod tests {
 
     #[test]
     fn test_consecutive_blocks() {
-        let text = "```watch:build\ncargo build\n```\n```watch:test\ncargo test\n```";
+        let text = "```
+watch:build\ncargo build\n```\n```
+watch:test\ncargo test\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
     }
 
     #[test]
     fn test_empty_prose_between_blocks_ignored() {
-        let text = "```watch:build\ncargo build\n```\n\n\n```watch:test\ncargo test\n```";
+        let text = "```
+watch:build\ncargo build\n```\n\n\n```
+watch:test\ncargo test\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 2);
     }
 
     #[test]
     fn test_exec_block_basic() {
-        let text = "```exec:install\ncargo add serde\n```";
+        let text = "```
+exec:install\ncargo add serde\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -587,7 +604,8 @@ mod tests {
     #[test]
     fn test_exec_block_with_heredoc_inside() {
         let text =
-            "```exec:write-config\ncat > config.toml << 'EOF'\n[build]\nrelease = true\nEOF\n```";
+            "```
+exec:write-config\ncat > config.toml << 'EOF'\n[build]\nrelease = true\nEOF\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -599,7 +617,8 @@ mod tests {
 
     #[test]
     fn test_file_block() {
-        let text = "```file:src/main.rs\n```";
+        let text = "```
+file:src/main.rs\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -611,7 +630,8 @@ mod tests {
 
     #[test]
     fn test_edit_block() {
-        let text = "```edit:src/main.rs\nExactly L10:old start\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM\n```";
+        let text = "```
+edit:src/main.rs\nExactly L10:old start\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -623,7 +643,8 @@ mod tests {
 
     #[test]
     fn test_write_block() {
-        let text = "```write:src/main.rs\nfn main() {}\n```";
+        let text = "```
+write:src/main.rs\nfn main() {}\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
@@ -728,7 +749,8 @@ mod tests {
 
     #[test]
     fn test_parse_dashboard_block() {
-        let text = "```watch.dashboard:tree\ntree -l\n```";
+        let text = "```
+watch.dashboard:tree\ntree -l\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "tree");
@@ -738,7 +760,8 @@ mod tests {
 
     #[test]
     fn test_parse_file_dashboard_block() {
-        let text = "```file.dashboard:mind.md\n```";
+        let text = "```
+file.dashboard:mind.md\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "mind.md");
@@ -748,7 +771,8 @@ mod tests {
 
     #[test]
     fn test_parse_task_block_with_other() {
-        let text = "```task\n1. Check build\n2. Fix errors\n```\n```watch:build\ncargo build\n```";
+        let text = "```\ntask\n1. Check build\n2. Fix errors\n```\n```
+watch:build\ncargo build\n```";
         let resp = parse_response(text);
         assert_eq!(resp.task, "1. Check build\n2. Fix errors");
         assert_eq!(resp.segments.len(), 1);
@@ -758,7 +782,7 @@ mod tests {
 
     #[test]
     fn test_parse_task_only() {
-        let text = "Some reasoning\n\n```task\nWait for user input then proceed\n```";
+        let text = "Some reasoning\n\n```\ntask\nWait for user input then proceed\n```";
         let resp = parse_response(text);
         assert_eq!(resp.task, "Wait for user input then proceed");
         assert!(resp.segments.is_empty());
@@ -766,7 +790,8 @@ mod tests {
 
     #[test]
     fn test_parse_no_task() {
-        let text = "```watch:build\ncargo build\n```";
+        let text = "```
+watch:build\ncargo build\n```";
         let resp = parse_response(text);
         assert!(resp.task.is_empty());
         assert_eq!(resp.segments.len(), 1);
@@ -774,7 +799,8 @@ mod tests {
 
     #[test]
     fn test_task_not_in_segments() {
-        let text = "```task\nmy plan\n```\n```watch:build\ncargo build\n```";
+        let text = "```\ntask\nmy plan\n```\n```
+watch:build\ncargo build\n```";
         let resp = parse_response(text);
         assert_eq!(resp.task, "my plan");
         assert_eq!(resp.segments.len(), 1);
@@ -783,7 +809,8 @@ mod tests {
 
     #[test]
     fn test_write_with_heredoc() {
-        let text = "```write:readme.md\n<<'TAIDELIM'\n# Hello\n```rust\nfn main() {}\n```\nTAIDELIM\n```";
+        let text = "```
+write:readme.md\n<<'TAIDELIM'\n# Hello\n```rust\nfn main() {}\n```\nTAIDELIM\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "readme.md");
@@ -796,7 +823,8 @@ mod tests {
 
     #[test]
     fn test_edit_with_heredoc() {
-        let text = "```edit:src/main.rs\nExactly L10:old line\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM\n```";
+        let text = "```
+edit:src/main.rs\nExactly L10:old line\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "src/main.rs");
@@ -807,7 +835,8 @@ mod tests {
 
     #[test]
     fn test_write_without_heredoc_flagged() {
-        let text = "```write:readme.md\n# Hello\n```";
+        let text = "```
+write:readme.md\n# Hello\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].content, "# Hello");
@@ -817,7 +846,8 @@ mod tests {
 
     #[test]
     fn test_edit_without_heredoc_flagged() {
-        let text = "```edit:src/main.rs\n10c\nREPLACED\n```";
+        let text = "```
+edit:src/main.rs\n10c\nREPLACED\n```";
         let resp = parse_response(text);
         assert_eq!(resp.heredoc_violations.len(), 1);
         assert!(resp.heredoc_violations[0].contains("edit:src/main.rs"));
@@ -841,7 +871,8 @@ mod tests {
     }
     #[test]
     fn test_task_complete_sets_flag() {
-        let text = "```task:complete\nTask finished\n```";
+        let text = "```
+task:complete\nTask finished\n```";
         let resp = parse_response(text);
         assert!(resp.complete);
         assert_eq!(resp.task, "Task finished");
@@ -850,7 +881,9 @@ mod tests {
 
     #[test]
     fn test_task_complete_with_blocks() {
-        let text = "```watch:build\ncargo build\n```\n```task:complete\nAll done\n```";
+        let text = "```
+watch:build\ncargo build\n```\n```
+task:complete\nAll done\n```";
         let resp = parse_response(text);
         assert!(resp.complete);
         assert_eq!(resp.task, "All done");
@@ -859,7 +892,7 @@ mod tests {
 
     #[test]
     fn test_task_without_complete_no_flag() {
-        let text = "```task\nStill working\n```";
+        let text = "```\ntask\nStill working\n```";
         let resp = parse_response(text);
         assert!(!resp.complete);
         assert_eq!(resp.task, "Still working");
@@ -867,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_parse_task_block() {
-        let text = "```task\nRefactor auth module\n```";
+        let text = "```\ntask\nRefactor auth module\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 0);
         assert_eq!(resp.task, "Refactor auth module");
@@ -876,7 +909,8 @@ mod tests {
 
     #[test]
     fn test_parse_task_complete() {
-        let text = "```task:complete\nDone refactoring.\n```";
+        let text = "```
+task:complete\nDone refactoring.\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 0);
         assert_eq!(resp.task, "Done refactoring.");

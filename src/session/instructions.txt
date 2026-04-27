@@ -6,12 +6,11 @@ Every response MUST contain a task block. All other blocks are optional.
 
 ### Code Block Syntax
 
-Each block starts with three backticks and a header on the same line:
+Each block starts with three backticks on one line, then the header on the next line:
 
 ```
-```mode:title
+mode:title
 content
-```
 ```
 
 - **With colon** (`mode:title`) — the part before `:` is the mode, the part after is the window title. Used for: `file:path`, `watch:name`, `exec:name`, `edit:path`, `write:path`, `ask:name`, `close:name`.
@@ -25,16 +24,18 @@ There is no "default" mode. A block whose header cannot be parsed as a known mod
 Text outside code blocks is **prose** — it groups with the NEXT code block and appears as your explanation for that action.
 
 Example:
-```
+``````
 I need to check the current file state
-```file:work/src/main.rs
+```
+file:work/src/main.rs
 ```
 
 Now I'll install the dependency
-```exec:install
+```
+exec:install
 cargo add serde
 ```
-```
+``````
 
 ### Block Modes
 
@@ -53,7 +54,8 @@ cargo add serde
 
 Use `task:complete` to signal that the task is finished and return the final result. This ends the session immediately and prints the result to stdout:
 
-```task:complete
+```
+task:complete
 Task finished successfully. All changes verified.
 ```
 
@@ -85,12 +87,11 @@ Do not use absolute paths.
 Write blocks MUST use heredoc syntax to avoid conflicts with ``` in content:
 
 ```
-```write:work/config.yaml
+write:work/config.yaml
 <<'TAIDELIM'
 server:
   port: 8080
 TAIDELIM
-```
 ```
 
 The content goes between `<<'TAIDELIM'` and `TAIDELIM`. This is **mandatory** — the system will re-prompt you if you forget it.
@@ -108,13 +109,12 @@ Each edit block contains **exactly one** command: replace a line (or range) with
 
 - `L<n>:text` — line *n* with content *text*
 - `L<n>;` — line *n* is empty (blank line)
-- `$:text` — last line with content *text*
-- `$;` — last line is empty
 
 ### Command format
 
 **Single line:**
 ```
+edit:work/some/file
 Exactly L<n>:line text
 <<'TAIDELIM'
 [content lines]
@@ -123,8 +123,9 @@ TAIDELIM
 
 **Range:**
 ```
-Start L<n>:line text
-End L<m>:line text
+edit:work/example
+Start L<n>:start line text
+End L<m>:end line text
 <<'TAIDELIM'
 [content lines]
 TAIDELIM
@@ -137,7 +138,7 @@ TAIDELIM
 
 Replace a single line:
 ```
-```edit:work/src/main.rs
+edit:work/src/main.rs
 Exactly L5:    todo!("fetch data")
 <<'TAIDELIM'
     let data = fetch_data();
@@ -145,11 +146,10 @@ Exactly L5:    todo!("fetch data")
     println!("{result}");
 TAIDELIM
 ```
-```
 
 Replace a range that ends with an empty line:
 ```
-```edit:work/src/main.rs
+edit:work/src/main.rs
 Start L1:use some::mod;
 End L2;
 <<'TAIDELIM'
@@ -158,38 +158,34 @@ use some::new::mod;
 
 TAIDELIM
 ```
-```
 
 Delete a line (empty heredoc):
 ```
-```edit:work/src/main.rs
+edit:work/src/main.rs
 Exactly L10:    unused_call();
 <<'TAIDELIM'
 TAIDELIM
 ```
-```
 
 Insert before a line (include original line at the **end** of heredoc):
 ```
-```edit:work/src/main.rs
+edit:work/src/main.rs
 Exactly L5:pub fn main() {
 <<'TAIDELIM'
     some_helper();
 
 pub fn main() {
 TAIDELIM
-```
 ```
 
 Append after a line (include original line at the **start** of heredoc):
 ```
-```edit:work/src/main.rs
+edit:work/src/main.rs
 Exactly L5:pub fn main() {
 <<'TAIDELIM'
 pub fn main() {
     some_helper();
 TAIDELIM
-```
 ```
 
 ### Rules
