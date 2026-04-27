@@ -157,9 +157,9 @@ TAI
 Replace a range that ends with an empty line:
 ```
 ```edit:src/main.rs
-<<'TAI'
 Change Start L1:use some::mod;
 End L2;
+<<'TAI'
 use some::mod::{self, SomeImport};
 use some::new::mod;
 

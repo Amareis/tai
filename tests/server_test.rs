@@ -221,7 +221,7 @@ async fn edit_mode_modifies_file() {
             AgentResponse::block(
                 "edit-test.txt",
                 BlockMode::Edit(None),
-                "Change Exactly L2:line two\nREPLACED",
+                "Change Exactly L2:line two\n<<'TAI'\nREPLACED\nTAI",
             )
             .with_task("editing file"),
         )
@@ -263,7 +263,7 @@ async fn edit_mode_rejects_unknown_line() {
             AgentResponse::block(
                 "edit-test.txt",
                 BlockMode::Edit(None),
-                "Change Exactly L2:wrong line\nREPLACED",
+                "Change Exactly L2:wrong line\n<<'TAI'\nREPLACED\nTAI",
             )
             .with_task("editing file with bad line ref"),
         )

@@ -119,7 +119,21 @@ pub fn parse_response(input: &str) -> AgentResponse {
                     continue;
                 }
                 if mode.requires_heredoc() {
-                    if let Some(extracted) = extract_heredoc_content(&content) {
+                    if matches!(mode, BlockMode::Edit(_)) {
+                        // Edit blocks keep raw content with inner heredoc
+                        if !content.contains("<<") {
+                            heredoc_violations.push(format!(
+                                "{mode}:{window} — content must use heredoc (<<'TAI' ... TAI)"
+                            ));
+                        }
+                        blocks.push(ParsedBlock {
+                            window,
+                            mode,
+                            content,
+                            prose: prose_buf.take(),
+                            dashboard,
+                        });
+                    } else if let Some(extracted) = extract_heredoc_content(&content) {
                         blocks.push(ParsedBlock {
                             window,
                             mode,
@@ -663,7 +677,7 @@ mod tests {
             ParsedBlock {
                 window: "src/lib.rs".into(),
                 mode: BlockMode::Edit(None),
-                content: "Change Start L10:old start\nEnd L15:old end\nfn new() {}".into(),
+                content: "Change Start L10:old start\nEnd L15:old end\n<<'TAI'\nfn new() {}\nTAI".into(),
                 prose: None,
                 dashboard: false,
             },
@@ -874,7 +888,7 @@ mod tests {
         let block = ParsedBlock {
             window: "src/main.rs".into(),
             mode: BlockMode::Edit(None),
-            content: "Change Exactly L10:old line\nfn new() {}".into(),
+            content: "Change Exactly L10:old line\n<<'TAI'\nfn new() {}\nTAI".into(),
             prose: None,
             dashboard: false,
         };

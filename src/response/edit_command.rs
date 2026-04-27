@@ -203,7 +203,26 @@ pub fn parse_edit_command(
     let cmd_content = if action == EditAction::Delete {
         String::new()
     } else {
-        lines.get(i..).map_or(String::new(), |s| s.join("\n"))
+        let heredoc_line = lines.get(i).ok_or_else(|| EditError::Parse {
+            line: i + 1,
+            message: "expected heredoc start <<'TAI'".to_string(),
+        })?;
+        let trimmed = heredoc_line.trim();
+        let delim = extract_heredoc_delimiter(trimmed).ok_or_else(|| EditError::Parse {
+            line: i + 1,
+            message: format!("expected heredoc start <<'TAI', got: {heredoc_line}"),
+        })?;
+        i += 1;
+
+        let mut content_lines = Vec::new();
+        while let Some(line) = lines.get(i) {
+            if line.trim() == delim {
+                break;
+            }
+            content_lines.push(*line);
+            i += 1;
+        }
+        content_lines.join("\n")
     };
 
     if has_file {
@@ -389,11 +408,31 @@ pub fn serialize_edit_command(cmd: &EditCommand) -> String {
         text.push_str("\nEnd ");
         write_line_ref(&mut text, end, cmd.end_text.as_deref());
     }
-    if cmd.action != EditAction::Delete && !cmd.content.is_empty() {
-        text.push('\n');
+    if cmd.action != EditAction::Delete {
+        text.push_str("\n<<'TAI'\n");
         text.push_str(&cmd.content);
+        if !cmd.content.ends_with('\n') && !cmd.content.is_empty() {
+            text.push('\n');
+        }
+        text.push_str("TAI");
     }
     text
+}
+
+fn extract_heredoc_delimiter(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let after = trimmed.strip_prefix("<<")?;
+    let after = after.trim_start();
+    if let Some(rest) = after.strip_prefix('\'') {
+        let end = rest.find('\'')?;
+        Some(&rest[..end])
+    } else if let Some(rest) = after.strip_prefix('"') {
+        let end = rest.find('"')?;
+        Some(&rest[..end])
+    } else {
+        let end = after.find(|c: char| c.is_whitespace())?;
+        Some(&after[..end])
+    }
 }
 
 fn write_line_ref(text: &mut String, line_ref: &LineRef, line_text: Option<&str>) {
@@ -440,13 +479,14 @@ pub fn build_ex_script(path: &str, commands: &[EditCommand]) -> String {
     format!("ex {path} <<'TAIEX'\n{script}TAIEX")
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_parse_change_single() {
-        let cmd = parse_edit_command("Change Exactly L5:old line\nnew line", None).unwrap();
+        let cmd = parse_edit_command("Change Exactly L5:old line\n<<'TAI'\nnew line\nTAI", None).unwrap();
         assert_eq!(cmd.start, LineRef::Num(5));
         assert_eq!(cmd.end, None);
         assert_eq!(cmd.action, EditAction::Change);
@@ -457,7 +497,7 @@ mod tests {
     #[test]
     fn test_parse_change_range() {
         let cmd = parse_edit_command(
-            "Change Start L10:old start\nEnd L15:old end\nfn new() {}",
+            "Change Start L10:old start\nEnd L15:old end\n<<'TAI'\nfn new() {}\nTAI",
             None,
         )
         .unwrap();
@@ -490,7 +530,7 @@ mod tests {
     #[test]
     fn test_parse_insert() {
         let cmd = parse_edit_command(
-            "InsertBefore Exactly L5:existing line\ninserted line",
+            "InsertBefore Exactly L5:existing line\n<<'TAI'\ninserted line\nTAI",
             None,
         )
         .unwrap();
@@ -501,7 +541,7 @@ mod tests {
     #[test]
     fn test_parse_append() {
         let cmd = parse_edit_command(
-            "AppendAfter Exactly L5:existing line\nappended line",
+            "AppendAfter Exactly L5:existing line\n<<'TAI'\nappended line\nTAI",
             None,
         )
         .unwrap();
@@ -511,7 +551,7 @@ mod tests {
 
     #[test]
     fn test_parse_dollar_append() {
-        let cmd = parse_edit_command("AppendAfter Exactly $:last line\nat the end", None).unwrap();
+        let cmd = parse_edit_command("AppendAfter Exactly $:last line\n<<'TAI'\nat the end\nTAI", None).unwrap();
         assert_eq!(cmd.start, LineRef::Last);
         assert_eq!(cmd.end, None);
         assert_eq!(cmd.action, EditAction::AppendAfter);
@@ -519,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_parse_dollar_change() {
-        let cmd = parse_edit_command("Change Exactly $:old last line\nnew last line", None).unwrap();
+        let cmd = parse_edit_command("Change Exactly $:old last line\n<<'TAI'\nnew last line\nTAI", None).unwrap();
         assert_eq!(cmd.start, LineRef::Last);
         assert_eq!(cmd.end, None);
         assert_eq!(cmd.action, EditAction::Change);
@@ -527,15 +567,11 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_commands_rejected() {
-        // Only a single command is allowed per block
-        let result = parse_edit_command(
-            "Change Exactly L5:old five\nnew five\nDelete Exactly L10:line ten",
+        let cmd = parse_edit_command(
+            "Change Exactly L5:old five\n<<'TAI'\nnew five\nDelete Exactly L10:line ten\nTAI",
             None,
-        );
-        // The second command becomes part of the content — this is intentional.
-        // The caller (core) must ensure one block = one command.
-        assert!(result.is_ok());
-        let cmd = result.unwrap();
+        )
+        .unwrap();
         assert_eq!(cmd.action, EditAction::Change);
         assert_eq!(cmd.content, "new five\nDelete Exactly L10:line ten");
     }
@@ -606,7 +642,7 @@ mod tests {
     #[test]
     fn test_multiline_content() {
         let cmd = parse_edit_command(
-            "Change Exactly L5:old five\nline one\nline two\nline three",
+            "Change Exactly L5:old five\n<<'TAI'\nline one\nline two\nline three\nTAI",
             None,
         )
         .unwrap();
@@ -616,14 +652,14 @@ mod tests {
     #[test]
     fn test_validate_line_text_ok() {
         let file = "first\nsecond\nthird\nfourth\nfifth\n";
-        let cmd = parse_edit_command("Change Exactly L2:second\nreplaced", Some(file)).unwrap();
+        let cmd = parse_edit_command("Change Exactly L2:second\n<<'TAI'\nreplaced\nTAI", Some(file)).unwrap();
         assert_eq!(cmd.start_text.as_deref(), Some("second"));
     }
 
     #[test]
     fn test_validate_line_text_mismatch() {
         let file = "first\nsecond\nthird\n";
-        let result = parse_edit_command("Change Exactly L2:wrong text\nreplaced", Some(file));
+        let result = parse_edit_command("Change Exactly L2:wrong text\n<<'TAI'\nreplaced\nTAI", Some(file));
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -635,7 +671,7 @@ mod tests {
     fn test_validate_line_text_end_range() {
         let file = "line1\nline2\nline3\nline4\nline5\n";
         let cmd = parse_edit_command(
-            "Change Start L2:line2\nEnd L4:line4\nnew block",
+            "Change Start L2:line2\nEnd L4:line4\n<<'TAI'\nnew block\nTAI",
             Some(file),
         )
         .unwrap();
@@ -646,7 +682,7 @@ mod tests {
     fn test_validate_line_text_end_mismatch() {
         let file = "line1\nline2\nline3\nline4\nline5\n";
         let result = parse_edit_command(
-            "Change Start L2:line2\nEnd L4:wrong\nnew",
+            "Change Start L2:line2\nEnd L4:wrong\n<<'TAI'\nnew\nTAI",
             Some(file),
         );
         assert!(result.is_err());
@@ -658,22 +694,21 @@ mod tests {
 
     #[test]
     fn test_validate_no_file_skips() {
-        let cmd = parse_edit_command("Change Exactly L5:anything\nnew", None).unwrap();
-        // No validation error even though text doesn't match any file
+        let cmd = parse_edit_command("Change Exactly L5:anything\n<<'TAI'\nnew\nTAI", None).unwrap();
         assert_eq!(cmd.start, LineRef::Num(5));
     }
 
     #[test]
     fn test_validate_dollar_line() {
         let file = "line1\nline2\nlast line\n";
-        let cmd = parse_edit_command("AppendAfter Exactly $:last line\nadded", Some(file)).unwrap();
+        let cmd = parse_edit_command("AppendAfter Exactly $:last line\n<<'TAI'\nadded\nTAI", Some(file)).unwrap();
         assert_eq!(cmd.start, LineRef::Last);
     }
 
     #[test]
     fn test_validate_dollar_mismatch() {
         let file = "line1\nline2\nactual last\n";
-        let result = parse_edit_command("AppendAfter Exactly $:wrong last\nadded", Some(file));
+        let result = parse_edit_command("AppendAfter Exactly $:wrong last\n<<'TAI'\nadded\nTAI", Some(file));
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -684,7 +719,7 @@ mod tests {
     #[test]
     fn test_parse_range_with_dollar_end() {
         let cmd = parse_edit_command(
-            "Change Start L5:line five\nEnd $:last line\nnew ending",
+            "Change Start L5:line five\nEnd $:last line\n<<'TAI'\nnew ending\nTAI",
             None,
         )
         .unwrap();
@@ -695,7 +730,7 @@ mod tests {
     #[test]
     fn test_parse_dollar_range_with_num_end() {
         let cmd = parse_edit_command(
-            "Change Start $:first ref\nEnd L5:second ref\nnew",
+            "Change Start $:first ref\nEnd L5:second ref\n<<'TAI'\nnew\nTAI",
             None,
         )
         .unwrap();
@@ -705,14 +740,14 @@ mod tests {
 
     #[test]
     fn test_empty_change_content() {
-        let cmd = parse_edit_command("Change Exactly L5:old line\n", None).unwrap();
+        let cmd = parse_edit_command("Change Exactly L5:old line\n<<'TAI'\nTAI", None).unwrap();
         assert_eq!(cmd.content, "");
     }
 
     #[test]
     fn test_content_with_blank_line() {
         let cmd = parse_edit_command(
-            "Change Exactly L5:old\nnew line\n\nafter blank",
+            "Change Exactly L5:old\n<<'TAI'\nnew line\n\nafter blank\nTAI",
             None,
         )
         .unwrap();
@@ -721,26 +756,26 @@ mod tests {
 
     #[test]
     fn test_parse_unknown_action_fails() {
-        let result = parse_edit_command("Replace L5:text\nnew", None);
+        let result = parse_edit_command("Replace L5:text\n<<'TAI'\nnew\nTAI", None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), EditError::Parse { .. }));
     }
 
     #[test]
     fn test_parse_missing_line_ref_fails() {
-        let result = parse_edit_command("Change\n", None);
+        let result = parse_edit_command("Change\n<<'TAI'\nTAI", None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_parse_line_ref_without_colon_fails() {
-        let result = parse_edit_command("Change Exactly L5 no colon\nnew", None);
+        let result = parse_edit_command("Change Exactly L5 no colon\n<<'TAI'\nnew\nTAI", None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_parse_empty_line_ref() {
-        let cmd = parse_edit_command("Change Exactly L2;\nnew line", None).unwrap();
+        let cmd = parse_edit_command("Change Exactly L2;\n<<'TAI'\nnew line\nTAI", None).unwrap();
         assert_eq!(cmd.start, LineRef::Num(2));
         assert_eq!(cmd.start_text.as_deref(), Some(""));
         assert_eq!(cmd.content, "new line");
@@ -748,7 +783,7 @@ mod tests {
 
     #[test]
     fn test_parse_dollar_empty_line_ref() {
-        let cmd = parse_edit_command("AppendAfter Exactly $;\nadded", None).unwrap();
+        let cmd = parse_edit_command("AppendAfter Exactly $;\n<<'TAI'\nadded\nTAI", None).unwrap();
         assert_eq!(cmd.start, LineRef::Last);
         assert_eq!(cmd.start_text.as_deref(), Some(""));
         assert_eq!(cmd.content, "added");
@@ -757,14 +792,14 @@ mod tests {
     #[test]
     fn test_validate_empty_line_text() {
         let file = "first\n\nthird\n";
-        let cmd = parse_edit_command("Change Exactly L2;\ninserted", Some(file)).unwrap();
+        let cmd = parse_edit_command("Change Exactly L2;\n<<'TAI'\ninserted\nTAI", Some(file)).unwrap();
         assert_eq!(cmd.start_text.as_deref(), Some(""));
     }
 
     #[test]
     fn test_parse_change_with_empty_line_range() {
         let cmd = parse_edit_command(
-            "Change Start L1:old start\nEnd L2;\nnew block",
+            "Change Start L1:old start\nEnd L2;\n<<'TAI'\nnew block\nTAI",
             None,
         )
         .unwrap();
@@ -777,14 +812,14 @@ mod tests {
 
     #[test]
     fn test_validate_texts_against_output_ok() {
-        let cmd = parse_edit_command("Change Exactly L2:line two\nREPLACED", None).unwrap();
+        let cmd = parse_edit_command("Change Exactly L2:line two\n<<'TAI'\nREPLACED\nTAI", None).unwrap();
         let output = "L1:line one\nL2:line two\nL3:line three\n";
         assert!(validate_texts_against_output(&cmd, output).is_ok());
     }
 
     #[test]
     fn test_validate_texts_against_output_missing_start() {
-        let cmd = parse_edit_command("Change Exactly L2:wrong line\nREPLACED", None).unwrap();
+        let cmd = parse_edit_command("Change Exactly L2:wrong line\n<<'TAI'\nREPLACED\nTAI", None).unwrap();
         let output = "L1:line one\nL2:line two\nL3:line three\n";
         let result = validate_texts_against_output(&cmd, output);
         assert!(result.is_err());
@@ -794,7 +829,7 @@ mod tests {
     #[test]
     fn test_validate_texts_against_output_missing_end() {
         let cmd = parse_edit_command(
-            "Change Start L1:line one\nEnd L5:missing end\nnew",
+            "Change Start L1:line one\nEnd L5:missing end\n<<'TAI'\nnew\nTAI",
             None,
         )
         .unwrap();
