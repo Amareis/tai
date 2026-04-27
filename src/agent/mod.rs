@@ -45,7 +45,7 @@ impl AgentResponse {
         let window = window.into();
         let content = content.into();
         let mode = if matches!(mode, BlockMode::Edit(_)) {
-            match crate::response::edit_command::parse_edit_command(&content, None) {
+            match crate::response::edit_command::parse_edit_command(&content) {
                 Ok(cmd) => BlockMode::Edit(Some(cmd)),
                 Err(_) => BlockMode::Edit(None),
             }

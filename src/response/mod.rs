@@ -169,7 +169,7 @@ pub fn parse_response(input: &str) -> AgentResponse {
     let mut edit_parse_errors: Vec<String> = Vec::new();
     for block in &mut blocks {
         if let BlockMode::Edit(ref mut cmd_opt) = block.mode && cmd_opt.is_none() {
-            match edit_command::parse_edit_command(&block.content, None) {
+            match edit_command::parse_edit_command(&block.content) {
                 Ok(cmd) => *cmd_opt = Some(cmd),
                 Err(e) => edit_parse_errors.push(format!("edit:{} — {e}", block.window)),
             }
