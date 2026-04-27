@@ -269,22 +269,26 @@ impl Server {
             let mut edit_err: Option<edit_command::EditError> = None;
 
             for block in blocks {
-                if let BlockMode::Edit(ref cmds) = block.mode {
-                    if cmds.is_empty() {
-                        edit_err = Some(edit_command::EditError::Parse {
-                            line: 0,
-                            message: "edit commands not parsed".to_string(),
-                        });
-                        break;
+                if let BlockMode::Edit(ref cmd_opt) = block.mode {
+                    match cmd_opt.as_ref() {
+                        None => {
+                            edit_err = Some(edit_command::EditError::Parse {
+                                line: 0,
+                                message: "edit command not parsed".to_string(),
+                            });
+                            break;
+                        }
+                        Some(cmd) => {
+                            if let Some(ref out) = prev_output
+                                && let Err(e) =
+                                    edit_command::validate_texts_against_output(cmd, &out.stdout)
+                            {
+                                edit_err = Some(e);
+                                break;
+                            }
+                            all_commands.push(cmd.clone());
+                        }
                     }
-                    if let Some(ref out) = prev_output
-                        && let Err(e) =
-                            edit_command::validate_texts_against_output(cmds, &out.stdout)
-                    {
-                        edit_err = Some(e);
-                        break;
-                    }
-                    all_commands.extend(cmds.iter().cloned());
                 }
             }
 
@@ -299,6 +303,16 @@ impl Server {
             }
 
             if all_commands.is_empty() {
+                continue;
+            }
+
+            if let Err(e) = edit_command::validate_no_overlaps(&all_commands) {
+                warn!("edit error for {path}: {e}");
+                let output = crate::backend::CmdOutput {
+                    exit_code: 1,
+                    stdout: format!("edit error: {e}"),
+                };
+                outputs.insert(path.clone(), output);
                 continue;
             }
 

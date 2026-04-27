@@ -220,8 +220,8 @@ async fn edit_mode_modifies_file() {
             |_state: &State| {},
             AgentResponse::block(
                 "edit-test.txt",
-                BlockMode::Edit(Vec::new()),
-                "Change Exactly L2:line two\nREPLACED\n.",
+                BlockMode::Edit(None),
+                "Change Exactly L2:line two\nREPLACED",
             )
             .with_task("editing file"),
         )
@@ -262,8 +262,8 @@ async fn edit_mode_rejects_unknown_line() {
             |_state: &State| {},
             AgentResponse::block(
                 "edit-test.txt",
-                BlockMode::Edit(Vec::new()),
-                "Change Exactly L2:wrong line\nREPLACED\n.",
+                BlockMode::Edit(None),
+                "Change Exactly L2:wrong line\nREPLACED",
             )
             .with_task("editing file with bad line ref"),
         )

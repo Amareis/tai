@@ -28,10 +28,10 @@ fn check_edit_violations(
 ) -> Vec<String> {
     let mut violations = Vec::new();
     for block in segments {
-        if let BlockMode::Edit(ref cmds) = block.mode {
-            if cmds.is_empty() {
+        if let BlockMode::Edit(ref cmd_opt) = block.mode {
+            if cmd_opt.is_none() {
                 violations.push(format!(
-                    "edit:{} — edit commands not parsed.",
+                    "edit:{} — edit command not parsed.",
                     block.window
                 ));
                 continue;
@@ -43,7 +43,9 @@ fn check_edit_violations(
                 ));
                 continue;
             };
-            if let Err(e) = edit_command::validate_texts_against_output(cmds, &output.stdout) {
+            if let Some(cmd) = cmd_opt.as_ref()
+                && let Err(e) = edit_command::validate_texts_against_output(cmd, &output.stdout)
+            {
                 violations.push(format!("edit:{} — {e}", block.window));
             }
         }
@@ -384,7 +386,7 @@ mod tests {
     fn test_check_edit_violations_missing_output() {
         let segments = vec![ParsedBlock {
             window: "main.rs".into(),
-            mode: BlockMode::Edit(vec![]),
+            mode: BlockMode::Edit(None),
             content: "Change\nL1:foo\nbar\n.".into(),
             prose: None,
             dashboard: false,
@@ -392,15 +394,15 @@ mod tests {
         let outputs = HashMap::new();
         let violations = check_edit_violations(&segments, &outputs);
         assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("edit commands not parsed"));
+        assert!(violations[0].contains("edit command not parsed"));
     }
 
     #[test]
     fn test_check_edit_violations_ok() {
-        let cmds = edit_command::parse_edit_commands("Change Exactly L2:line two\nREPLACED\n.", None).unwrap();
+        let cmd = edit_command::parse_edit_command("Change Exactly L2:line two\nREPLACED", None).unwrap();
         let segments = vec![ParsedBlock {
             window: "main.rs".into(),
-            mode: BlockMode::Edit(cmds),
+            mode: BlockMode::Edit(Some(cmd)),
             content: String::new(),
             prose: None,
             dashboard: false,
@@ -418,10 +420,10 @@ mod tests {
 
     #[test]
     fn test_check_edit_violations_text_mismatch() {
-        let cmds = edit_command::parse_edit_commands("Change Exactly L2:wrong line\nREPLACED\n.", None).unwrap();
+        let cmd = edit_command::parse_edit_command("Change Exactly L2:wrong line\nREPLACED", None).unwrap();
         let segments = vec![ParsedBlock {
             window: "main.rs".into(),
-            mode: BlockMode::Edit(cmds),
+            mode: BlockMode::Edit(Some(cmd)),
             content: String::new(),
             prose: None,
             dashboard: false,

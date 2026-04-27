@@ -45,9 +45,9 @@ impl AgentResponse {
         let window = window.into();
         let content = content.into();
         let mode = if matches!(mode, BlockMode::Edit(_)) {
-            match crate::response::edit_command::parse_edit_commands(&content, None) {
-                Ok(cmds) => BlockMode::Edit(cmds),
-                Err(_) => BlockMode::Edit(Vec::new()),
+            match crate::response::edit_command::parse_edit_command(&content, None) {
+                Ok(cmd) => BlockMode::Edit(Some(cmd)),
+                Err(_) => BlockMode::Edit(None),
             }
         } else {
             mode
@@ -175,12 +175,12 @@ mod tests {
     fn test_agent_response_block_edit_parses_commands() {
         let resp = AgentResponse::block(
             "src/main.rs",
-            BlockMode::Edit(Vec::new()),
-            "Change Exactly L1:old text\nnew text\n.\n",
+            BlockMode::Edit(None),
+            "Change Exactly L1:old text\nnew text",
         );
         assert_eq!(resp.segments.len(), 1);
-        if let BlockMode::Edit(ref cmds) = resp.segments[0].mode {
-            assert!(!cmds.is_empty(), "edit commands should be parsed from content");
+        if let BlockMode::Edit(ref cmd_opt) = resp.segments[0].mode {
+            assert!(cmd_opt.is_some(), "edit command should be parsed from content");
         } else {
             panic!("expected Edit mode");
         }

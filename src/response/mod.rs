@@ -61,11 +61,11 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                     ),
                 );
             }
-            BlockMode::Edit(ref cmds) => {
-                let content = if cmds.is_empty() {
-                    block.content.clone()
+            BlockMode::Edit(ref cmd_opt) => {
+                let content = if let Some(cmd) = cmd_opt {
+                    edit_command::serialize_edit_command(cmd)
                 } else {
-                    edit_command::serialize_edit_commands(cmds)
+                    block.content.clone()
                 };
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
@@ -154,9 +154,9 @@ pub fn parse_response(input: &str) -> AgentResponse {
 
     let mut edit_parse_errors: Vec<String> = Vec::new();
     for block in &mut blocks {
-        if let BlockMode::Edit(ref mut cmds) = block.mode && cmds.is_empty() {
-            match edit_command::parse_edit_commands(&block.content, None) {
-                Ok(parsed) => *cmds = parsed,
+        if let BlockMode::Edit(ref mut cmd_opt) = block.mode && cmd_opt.is_none() {
+            match edit_command::parse_edit_command(&block.content, None) {
+                Ok(cmd) => *cmd_opt = Some(cmd),
                 Err(e) => edit_parse_errors.push(format!("edit:{} — {e}", block.window)),
             }
         }
@@ -662,8 +662,8 @@ mod tests {
             },
             ParsedBlock {
                 window: "src/lib.rs".into(),
-                mode: BlockMode::Edit(vec![]),
-                content: "Change\nL10:old start\nL15:old end\nfn new() {}\n.\n".into(),
+                mode: BlockMode::Edit(None),
+                content: "Change Start L10:old start\nEnd L15:old end\nfn new() {}".into(),
                 prose: None,
                 dashboard: false,
             },
@@ -873,8 +873,8 @@ mod tests {
     fn test_serialize_edit_uses_heredoc() {
         let block = ParsedBlock {
             window: "src/main.rs".into(),
-            mode: BlockMode::Edit(vec![]),
-            content: "Change\nL10:old line\nfn new() {}\n.\n".into(),
+            mode: BlockMode::Edit(None),
+            content: "Change Exactly L10:old line\nfn new() {}".into(),
             prose: None,
             dashboard: false,
         };

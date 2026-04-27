@@ -97,7 +97,12 @@ The content goes between `<<'TAIDELIM'` and `TAIDELIM`. This is **mandatory** â€
 
 ## Editing Files
 
-Edit commands use a structured format. The header line is `ActionWord Exactly L<n>:text` for a single line, or `ActionWord Start L<n>:text` followed by a second line `End L<m>:text` for a range. Content follows on subsequent lines until a lone `.`
+Each edit block contains **exactly one** command. The format is:
+
+1. Header line with action and line reference
+2. For ranges: second header line with `End`
+3. For Change/InsertBefore/AppendAfter: remaining lines are content
+4. For Delete: no content
 
 ### Actions
 
@@ -121,7 +126,6 @@ Edit commands use a structured format. The header line is `ActionWord Exactly L<
 ```
 ActionWord Exactly L<n>:line text
 [content lines]
-.
 ```
 
 **Range:**
@@ -129,10 +133,10 @@ ActionWord Exactly L<n>:line text
 ActionWord Start L<n>:line text
 End L<m>:line text
 [content lines]
-.
 ```
 
-- **Delete**: no content or dot needed
+- **Delete**: no content lines
+- **One command per block** â€” for multiple edits, send multiple `edit` blocks
 
 Commands are automatically sorted **bottom-to-top** before execution, so you can write them in any order without worrying about line number shifts from earlier edits.
 
@@ -146,7 +150,6 @@ Change Exactly L5:old_function()
 fn new_function() {
     println!("updated");
 }
-.
 TAI
 ```
 ```
@@ -160,7 +163,6 @@ End L2;
 use some::mod::{self, SomeImport};
 use some::new::mod;
 
-.
 TAI
 ```
 ```
@@ -180,7 +182,6 @@ Append after a line:
 <<'TAI'
 AppendAfter Exactly L5:pub fn main() {
     some_helper();
-.
 TAI
 ```
 ```

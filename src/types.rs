@@ -7,7 +7,7 @@ pub enum BlockMode {
     Exec,
     Ask,
     File,
-    Edit(Vec<crate::response::edit_command::EditCommand>),
+    Edit(Option<crate::response::edit_command::EditCommand>),
     Write,
     Task,
     Delegate,
@@ -23,7 +23,7 @@ impl std::str::FromStr for BlockMode {
             "exec" => Ok(Self::Exec),
             "ask" => Ok(Self::Ask),
             "file" => Ok(Self::File),
-            "edit" => Ok(Self::Edit(Vec::new())),
+            "edit" => Ok(Self::Edit(None)),
             "write" => Ok(Self::Write),
             "task" => Ok(Self::Task),
             "delegate" => Ok(Self::Delegate),
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn test_from_str_edit() {
         let mode = "edit".parse::<BlockMode>().unwrap();
-        assert!(matches!(mode, BlockMode::Edit(cmds) if cmds.is_empty()));
+        assert!(matches!(mode, BlockMode::Edit(None)));
     }
 
     #[test]
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(BlockMode::Exec.to_string(), "exec");
         assert_eq!(BlockMode::Ask.to_string(), "ask");
         assert_eq!(BlockMode::File.to_string(), "file");
-        assert_eq!(BlockMode::Edit(Vec::new()).to_string(), "edit");
+        assert_eq!(BlockMode::Edit(None).to_string(), "edit");
         assert_eq!(BlockMode::Write.to_string(), "write");
         assert_eq!(BlockMode::Task.to_string(), "task");
         assert_eq!(BlockMode::Delegate.to_string(), "delegate");
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn test_requires_heredoc() {
         assert!(BlockMode::Write.requires_heredoc());
-        assert!(BlockMode::Edit(Vec::new()).requires_heredoc());
+        assert!(BlockMode::Edit(None).requires_heredoc());
         assert!(!BlockMode::Watch.requires_heredoc());
         assert!(!BlockMode::Exec.requires_heredoc());
         assert!(!BlockMode::Ask.requires_heredoc());
@@ -170,7 +170,7 @@ mod tests {
         assert!(!BlockMode::Ask.is_terminal());
         assert!(!BlockMode::File.is_terminal());
         assert!(!BlockMode::Write.is_terminal());
-        assert!(!BlockMode::Edit(Vec::new()).is_terminal());
+        assert!(!BlockMode::Edit(None).is_terminal());
     }
 
     #[test]
