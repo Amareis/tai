@@ -176,7 +176,7 @@ mod tests {
         let resp = AgentResponse::block(
             "src/main.rs",
             BlockMode::Edit(None),
-            "Change Exactly L1:old text\n<<'TAI'\nnew text\nTAI",
+            "Change Exactly L1:old text\n<<'TAIDELIM'\nnew text\nTAIDELIM",
         );
         assert_eq!(resp.segments.len(), 1);
         if let BlockMode::Edit(ref cmd_opt) = resp.segments[0].mode {

@@ -27,7 +27,7 @@ Text outside code blocks is **prose** — it groups with the NEXT code block and
 Example:
 ```
 I need to check the current file state
-```file:src/main.rs
+```file:work/src/main.rs
 ```
 
 Now I'll install the dependency
@@ -85,7 +85,7 @@ Do not use absolute paths.
 Write blocks MUST use heredoc syntax to avoid conflicts with ``` in content:
 
 ```
-```write:config.yaml
+```write:work/config.yaml
 <<'TAIDELIM'
 server:
   port: 8080
@@ -99,10 +99,10 @@ The content goes between `<<'TAIDELIM'` and `TAIDELIM`. This is **mandatory** �
 
 Each edit block contains **exactly one** command. The format is:
 
-1. Header line with action and line reference
-2. For ranges: second header line with `End`
-3. For Change/InsertBefore/AppendAfter: remaining lines are content
-4. For Delete: no content
+1. **Header line** with action and line reference
+2. For ranges: **second header line** with `End`
+3. For Change/InsertBefore/AppendAfter: **content** wrapped in `<<'TAIDELIM'` heredoc
+4. For Delete: no content, header only (still wrapped in `<<'TAIDELIM'` heredoc for consistency)
 
 ### Actions
 
@@ -125,17 +125,21 @@ Each edit block contains **exactly one** command. The format is:
 **Single line:**
 ```
 ActionWord Exactly L<n>:line text
+<<'TAIDELIM'
 [content lines]
+TAIDELIM
 ```
 
 **Range:**
 ```
 ActionWord Start L<n>:line text
 End L<m>:line text
+<<'TAIDELIM'
 [content lines]
+TAIDELIM
 ```
 
-- **Delete**: no content lines
+- **Delete**: no content lines, but still wrap header in heredoc
 - **One command per block** — for multiple edits, send multiple `edit` blocks
 
 Commands are automatically sorted **bottom-to-top** before execution, so you can write them in any order without worrying about line number shifts from earlier edits.
@@ -144,45 +148,45 @@ Commands are automatically sorted **bottom-to-top** before execution, so you can
 
 Replace a single line:
 ```
-```edit:src/main.rs
-<<'TAI'
+```edit:work/src/main.rs
 Change Exactly L5:old_function()
+<<'TAIDELIM'
 fn new_function() {
     println!("updated");
 }
-TAI
+TAIDELIM
 ```
 ```
 
 Replace a range that ends with an empty line:
 ```
-```edit:src/main.rs
+```edit:work/src/main.rs
 Change Start L1:use some::mod;
 End L2;
-<<'TAI'
+<<'TAIDELIM'
 use some::mod::{self, SomeImport};
 use some::new::mod;
 
-TAI
+TAIDELIM
 ```
 ```
 
 Delete a line:
 ```
-```edit:src/main.rs
-<<'TAI'
+```edit:work/src/main.rs
 Delete Exactly L10:    unused_call();
-TAI
+<<'TAIDELIM'
+TAIDELIM
 ```
 ```
 
 Append after a line:
 ```
-```edit:src/main.rs
-<<'TAI'
+```edit:work/src/main.rs
 AppendAfter Exactly L5:pub fn main() {
+<<'TAIDELIM'
     some_helper();
-TAI
+TAIDELIM
 ```
 ```
 

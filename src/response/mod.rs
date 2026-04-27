@@ -56,7 +56,7 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
                     format_args!(
-                        "```{}:{}\n<<'TAI'\n{}\nTAI\n```\n",
+                        "```{}:{}\n<<'TAIDELIM'\n{}\nTAIDELIM\n```\n",
                         prefix, block.window, block.content
                     ),
                 );
@@ -70,7 +70,7 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
                     format_args!(
-                        "```{}:{}\n<<'TAI'\n{}\nTAI\n```\n",
+                        "```{}:{}\n<<'TAIDELIM'\n{}\nTAIDELIM\n```\n",
                         prefix, block.window, content
                     ),
                 );
@@ -123,7 +123,7 @@ pub fn parse_response(input: &str) -> AgentResponse {
                         // Edit blocks keep raw content with inner heredoc
                         if !content.contains("<<") {
                             heredoc_violations.push(format!(
-                                "{mode}:{window} — content must use heredoc (<<'TAI' ... TAI)"
+                                "{mode}:{window} — content must use heredoc (<<'TAIDELIM' ... TAIDELIM)"
                             ));
                         }
                         blocks.push(ParsedBlock {
@@ -143,7 +143,7 @@ pub fn parse_response(input: &str) -> AgentResponse {
                         });
                     } else {
                         heredoc_violations.push(format!(
-                            "{mode}:{window} — content must use heredoc (<<'TAI' ... TAI)"
+                            "{mode}:{window} — content must use heredoc (<<'TAIDELIM' ... TAIDELIM)"
                         ));
                         blocks.push(ParsedBlock {
                             window,
@@ -677,7 +677,7 @@ mod tests {
             ParsedBlock {
                 window: "src/lib.rs".into(),
                 mode: BlockMode::Edit(None),
-                content: "Change Start L10:old start\nEnd L15:old end\n<<'TAI'\nfn new() {}\nTAI".into(),
+                content: "Change Start L10:old start\nEnd L15:old end\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM".into(),
                 prose: None,
                 dashboard: false,
             },
@@ -783,7 +783,7 @@ mod tests {
 
     #[test]
     fn test_write_with_heredoc() {
-        let text = "```write:readme.md\n<<'TAI'\n# Hello\n```rust\nfn main() {}\n```\nTAI\n```";
+        let text = "```write:readme.md\n<<'TAIDELIM'\n# Hello\n```rust\nfn main() {}\n```\nTAIDELIM\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "readme.md");
@@ -796,7 +796,7 @@ mod tests {
 
     #[test]
     fn test_edit_with_heredoc() {
-        let text = "```edit:src/main.rs\n<<'TAI'\nChange\nL10:old line\nfn new() {}\n.\nTAI\n```";
+        let text = "```edit:src/main.rs\n<<'TAIDELIM'\nChange\nL10:old line\nfn new() {}\n.\nTAIDELIM\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "src/main.rs");
@@ -833,8 +833,8 @@ mod tests {
             dashboard: false,
         };
         let text = serialize_blocks(&[block]);
-        assert!(text.contains("<<'TAI'"));
-        assert!(text.contains("\nTAI\n"));
+        assert!(text.contains("<<'TAIDELIM'"));
+        assert!(text.contains("\nTAIDELIM\n"));
         let parsed = parse_response(&text);
         assert!(parsed.heredoc_violations.is_empty());
         assert!(parsed.segments[0].content.contains("```rust"));
@@ -888,12 +888,12 @@ mod tests {
         let block = ParsedBlock {
             window: "src/main.rs".into(),
             mode: BlockMode::Edit(None),
-            content: "Change Exactly L10:old line\n<<'TAI'\nfn new() {}\nTAI".into(),
+            content: "Change Exactly L10:old line\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM".into(),
             prose: None,
             dashboard: false,
         };
         let text = serialize_blocks(&[block]);
-        assert!(text.contains("<<'TAI'"));
+        assert!(text.contains("<<'TAIDELIM'"));
         let parsed = parse_response(&text);
         assert!(parsed.heredoc_violations.is_empty());
     }
