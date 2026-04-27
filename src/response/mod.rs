@@ -70,7 +70,7 @@ pub fn serialize_blocks(segments: &[ParsedBlock]) -> String {
                 let _ = std::fmt::Write::write_fmt(
                     &mut text,
                     format_args!(
-                        "```{}:{}\n<<'TAIDELIM'\n{}\nTAIDELIM\n```\n",
+                        "```{}:{}\n{}\n```\n",
                         prefix, block.window, content
                     ),
                 );
@@ -611,13 +611,13 @@ mod tests {
 
     #[test]
     fn test_edit_block() {
-        let text = "```edit:src/main.rs\nChange\nL10:old start\nL15:old end\nfn new() {}\n.\n```";
+        let text = "```edit:src/main.rs\nExactly L10:old start\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM\n```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
             ParsedSegment::Block { window, mode, content, .. }
-            if window == "src/main.rs" && matches!(mode, BlockMode::Edit(_)) && content.contains("Change")
+            if window == "src/main.rs" && matches!(mode, BlockMode::Edit(_)) && content.contains("Exactly")
         ));
     }
 
@@ -677,7 +677,7 @@ mod tests {
             ParsedBlock {
                 window: "src/lib.rs".into(),
                 mode: BlockMode::Edit(None),
-                content: "Change Start L10:old start\nEnd L15:old end\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM".into(),
+                content: "Start L10:old start\nEnd L15:old end\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM".into(),
                 prose: None,
                 dashboard: false,
             },
@@ -796,12 +796,12 @@ mod tests {
 
     #[test]
     fn test_edit_with_heredoc() {
-        let text = "```edit:src/main.rs\n<<'TAIDELIM'\nChange\nL10:old line\nfn new() {}\n.\nTAIDELIM\n```";
+        let text = "```edit:src/main.rs\nExactly L10:old line\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM\n```";
         let resp = parse_response(text);
         assert_eq!(resp.segments.len(), 1);
         assert_eq!(resp.segments[0].window, "src/main.rs");
         assert!(matches!(resp.segments[0].mode, BlockMode::Edit(_)));
-        assert!(resp.segments[0].content.contains("Change"));
+        assert!(resp.segments[0].content.contains("Exactly"));
         assert!(resp.heredoc_violations.is_empty());
     }
 
@@ -888,7 +888,7 @@ mod tests {
         let block = ParsedBlock {
             window: "src/main.rs".into(),
             mode: BlockMode::Edit(None),
-            content: "Change Exactly L10:old line\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM".into(),
+            content: "Exactly L10:old line\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM".into(),
             prose: None,
             dashboard: false,
         };

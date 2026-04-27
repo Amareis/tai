@@ -97,21 +97,12 @@ The content goes between `<<'TAIDELIM'` and `TAIDELIM`. This is **mandatory** �
 
 ## Editing Files
 
-Each edit block contains **exactly one** command. The format is:
+Each edit block contains **exactly one** command: replace a line (or range) with content from a heredoc. There are no separate actions — everything is a replace.
 
-1. **Header line** with action and line reference
-2. For ranges: **second header line** with `End`
-3. For Change/InsertBefore/AppendAfter: **content** wrapped in `<<'TAIDELIM'` heredoc
-4. For Delete: no content, header only (still wrapped in `<<'TAIDELIM'` heredoc for consistency)
-
-### Actions
-
-| ActionWord | Meaning |
-|------------|---------|
-| `Change` | Replace line(s) with new content |
-| `Delete` | Remove line(s) |
-| `InsertBefore` | Insert content before a line |
-| `AppendAfter` | Insert content after a line |
+- **Replace** — heredoc contains the new content
+- **Delete** — heredoc is empty (`<<'TAIDELIM'` immediately followed by `TAIDELIM`)
+- **Insert before** — select the line, use a single-line range, and put the new content **before** the original line inside the heredoc
+- **Append after** — select the line, use a single-line range, and put the new content **after** the original line inside the heredoc
 
 ### Line references
 
@@ -124,7 +115,7 @@ Each edit block contains **exactly one** command. The format is:
 
 **Single line:**
 ```
-ActionWord Exactly L<n>:line text
+Exactly L<n>:line text
 <<'TAIDELIM'
 [content lines]
 TAIDELIM
@@ -132,28 +123,26 @@ TAIDELIM
 
 **Range:**
 ```
-ActionWord Start L<n>:line text
+Start L<n>:line text
 End L<m>:line text
 <<'TAIDELIM'
 [content lines]
 TAIDELIM
 ```
 
-- **Delete**: no content lines, but still wrap header in heredoc
 - **One command per block** — for multiple edits, send multiple `edit` blocks
-
-Commands are automatically sorted **bottom-to-top** before execution, so you can write them in any order without worrying about line number shifts from earlier edits.
+- Commands are automatically sorted **bottom-to-top** before execution, so you can write them in any order without worrying about line number shifts from earlier edits
 
 ### Examples
 
 Replace a single line:
 ```
 ```edit:work/src/main.rs
-Change Exactly L5:old_function()
+Exactly L5:    todo!("fetch data")
 <<'TAIDELIM'
-fn new_function() {
-    println!("updated");
-}
+    let data = fetch_data();
+    let result = process(data);
+    println!("{result}");
 TAIDELIM
 ```
 ```
@@ -161,7 +150,7 @@ TAIDELIM
 Replace a range that ends with an empty line:
 ```
 ```edit:work/src/main.rs
-Change Start L1:use some::mod;
+Start L1:use some::mod;
 End L2;
 <<'TAIDELIM'
 use some::mod::{self, SomeImport};
@@ -171,20 +160,33 @@ TAIDELIM
 ```
 ```
 
-Delete a line:
+Delete a line (empty heredoc):
 ```
 ```edit:work/src/main.rs
-Delete Exactly L10:    unused_call();
+Exactly L10:    unused_call();
 <<'TAIDELIM'
 TAIDELIM
 ```
 ```
 
-Append after a line:
+Insert before a line (include original line at the **end** of heredoc):
 ```
 ```edit:work/src/main.rs
-AppendAfter Exactly L5:pub fn main() {
+Exactly L5:pub fn main() {
 <<'TAIDELIM'
+    some_helper();
+
+pub fn main() {
+TAIDELIM
+```
+```
+
+Append after a line (include original line at the **start** of heredoc):
+```
+```edit:work/src/main.rs
+Exactly L5:pub fn main() {
+<<'TAIDELIM'
+pub fn main() {
     some_helper();
 TAIDELIM
 ```
