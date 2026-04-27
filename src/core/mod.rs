@@ -232,13 +232,6 @@ impl Server {
             upsert_segment(segments, (*block).clone());
         }
 
-        for block in &exec_blocks {
-            debug!("execute: '{}' exec", block.window);
-            let output = self.back.run(&block.window, &block.content).await;
-            outputs.insert(block.window.clone(), output);
-            upsert_segment(segments, (*block).clone());
-        }
-
         for block in &write_blocks {
             debug!("execute: '{}' write", block.window);
             let cmd = format!(
@@ -330,6 +323,14 @@ impl Server {
                 upsert_segment(segments, (*first).clone());
             }
         }
+
+        for block in &exec_blocks {
+            debug!("execute: '{}' exec", block.window);
+            let output = self.back.run(&block.window, &block.content).await;
+            outputs.insert(block.window.clone(), output);
+            upsert_segment(segments, (*block).clone());
+        }
+
         for block in &delegate_blocks {
             if outputs.contains_key(&block.window) {
                 debug!("delegate: '{}' cached", block.window);
