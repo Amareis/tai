@@ -272,7 +272,7 @@ pub fn validate_texts_against_output(cmd: &EditCommand, output: &str) -> Result<
     }
 
     if let Some(text) = cmd.end_text.as_ref() {
-        let end_found = lines.iter().any(|line| *line == text.as_str());
+        let end_found = lines.contains(&text.as_str());
         if !end_found {
             return Err(EditError::Parse {
                 line: 0,
