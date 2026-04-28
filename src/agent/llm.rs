@@ -365,70 +365,81 @@ fn render_window_summary(state: &State) -> String {
 
 #[must_use]
 fn build_task_messages(state: &State, resp: &AgentResponse) -> Vec<ChatCompletionRequestMessage> {
-    let mut body = String::new();
+    let mut context = String::new();
 
     if !state.outputs.is_empty() {
-        let _ = writeln!(body, "## Known results from previous ticks");
+        let _ = writeln!(context, "## Known results from previous ticks");
         for (key, out) in &state.outputs {
             let status = if out.exit_code == 0 { "OK" } else { "FAIL" };
             let preview: String = out.stdout.chars().take(80).collect();
             let _ = writeln!(
-                body,
+                context,
                 "- {}: exit {} ({}, {} chars) — {}",
                 key, out.exit_code, status, out.stdout.len(), preview
             );
         }
-        let _ = writeln!(body);
+        let _ = writeln!(context);
     }
 
     if !state.task.is_empty() {
-        let _ = writeln!(body, "## Previous task (for context only)\n{}\n", state.task);
+        let _ = writeln!(context, "## Previous task (for context only)\n{}\n", state.task);
     }
 
     if !resp.reasoning.is_empty() {
-        let _ = writeln!(body, "## Agent reasoning this tick\n{}\n", resp.reasoning);
+        let _ = writeln!(context, "## Agent reasoning this tick\n{}\n", resp.reasoning);
     }
 
     if !resp.segments.is_empty() {
-        let _ = writeln!(body, "## Commands sent by agent (results are NOT yet known)");
-        for seg in &resp.segments {
-            let action = match seg.mode {
-                BlockMode::Close | BlockMode::File | BlockMode::Edit(_) | BlockMode::Task => seg.window.clone(),
-                BlockMode::Write => format!("{} ({} chars)", seg.window, seg.content.len()),
-                BlockMode::Ask | BlockMode::Exec | BlockMode::Watch | BlockMode::Delegate => {
-                    format!("{} — {}", seg.window, seg.content)
-                }
-            };
-            let dash = if seg.dashboard { ".dashboard" } else { "" };
-            let mode_str = format!("{}{}", seg.mode, dash);
-            let _ = writeln!(body, "- {mode_str}: {action}");
-        }
-        let _ = writeln!(body);
+        let _ = writeln!(
+            context,
+            "## Agent's full raw response (prose + commands)\n``````markdown\n{}\n``````\n",
+            crate::response::serialize_blocks(&resp.segments)
+        );
     }
 
-    let prompt = r#"The agent operates in ticks. Each tick looks like this:
-1. Agent wakes up with ZERO memory. It sees only the task note + current system state.
-2. Agent reasons and decides what to do.
-3. Agent sends commands (watch, exec, edit, write, file, etc.).
-4. Commands execute. Their results appear on the NEXT tick.
-5. You (the external summarizer) receive the agent's reasoning, the commands it just sent, and any KNOWN results from earlier ticks.
+    let prompt = r#"You are the navigator in a pair programming session with an AI agent (the driver). The driver has zero memory between ticks and relies entirely on your task note.
 
-Your job: write the task/status note that the agent will see at step 1 of the next tick.
+The driver operates in ticks:
+1. Wakes up with ZERO memory. Sees only your task note + current system state.
+2. Reasons and decides what to do.
+3. Sends commands.
+4. Commands execute. Results appear on the NEXT tick.
+5. You see the driver's full response (prose + commands) and known results.
+
+Your job: write the task/status note that the driver will see at step 1 of the next tick.
+
+Format (use ALL sections):
+Goal: [original goal from Previous task — preserve exactly]
+Plan:
+[x] completed subtask
+[ ] pending subtask
+[ ] pending subtask
+Log: [last 3-5 actions across ticks; collapse older ones into summaries like "Ticks 2-4: explored codebase"]
+Done: [what was accomplished this tick]
+Known: [confirmed facts and state]
+Next: [concrete next step]
 
 Rules:
-- Do NOT use first person ("I", "my", "I did"). Write as an external observer/task list.
-- Format: "Goal: [original goal from Previous task]. Done: ... Known: ... Next: ..." — the original goal MUST be preserved and restated at the start of every summary so the agent never loses sight of why it is working.
-- Commands the agent JUST sent have NOT executed yet. Their results are unknown.
-- Be specific about what was learned and decided, and what must be done next.
-- Do not compress to a short phrase. Write 5-15 sentences capturing the essential context.
+- Plan is your todo list / roadmap. Update it every tick. Mark completed items [x], add new items as they emerge, remove irrelevant ones.
+- Log is a rolling window of recent driver actions. Keep 3-5 most recent entries. When older entries become irrelevant, collapse them into a single summary line.
+- Detect circular trajectories using Log. If the driver repeats an action already logged, call it out explicitly and propose a different angle.
+- Question flawed assumptions. If the driver's reasoning is wrong, say so and explain why.
+- Commands the driver JUST sent have NOT executed yet. Their results are unknown.
+- Be specific. Write enough to capture the essential context, but keep it concise.
 - If the original goal has been fully achieved, say so explicitly and set the next step to "Finish — use task:complete"."#;
 
-    let text = format!("{body}\n\n{prompt}");
+    let mut messages: Vec<ChatCompletionRequestMessage> = vec![
+        ChatCompletionRequestSystemMessage::from("You are the navigator in a pair programming session with an AI agent (the driver). The driver has zero memory between ticks and relies entirely on your task note. You see the driver's reasoning, prose, and commands, plus brief previews of command outputs (not full files or large outputs). Your job is to track the overall strategy, detect circular reasoning, question flawed assumptions, and set a clear task for the next tick. You are NOT the driver. Do not write code or commands.").into(),
+        ChatCompletionRequestUserMessage::from(context).into(),
+    ];
 
-    vec![
-        ChatCompletionRequestSystemMessage::from("You are an external task summarizer for an AI agent. You are NOT the agent.").into(),
-        ChatCompletionRequestUserMessage::from(text).into(),
-    ]
+    if !resp.segments.is_empty() {
+        let raw = crate::response::serialize_blocks(&resp.segments);
+        messages.push(ChatCompletionRequestAssistantMessage::from(raw.as_str()).into());
+    }
+
+    messages.push(ChatCompletionRequestUserMessage::from(prompt).into());
+    messages
 }
 
 #[cfg(test)]

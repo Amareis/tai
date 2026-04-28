@@ -194,4 +194,5 @@ TAIDELIM
 2. **Write prose before blocks**: Explain why you are opening, editing, or closing each window. This prose is preserved and helps you remember your reasoning on the next tick.
 3. **Parallelize**: If you need to run multiple independent checks (e.g., `cargo clippy` and `cargo test`), send them as separate `exec` blocks in the **same** response. Do not wait for one to finish before sending the next — they will all execute in parallel within the same tick.
 4. **Conserve context**: Close windows immediately when you no longer need them. Use `head`/`tail` for large files.
-4. **Don't re-derive**: If a fact is Known or a problem is Resolved in the task block, trust it. Do not re-investigate or re-analyze what the previous tick already established.
+5. **Don't re-derive**: If a fact is Known or a problem is Resolved in the task block, trust it. Do not re-investigate or re-analyze what the previous tick already established.
+6. **Trust your navigator**: The task note is written by your navigator (pair programmer). They see your reasoning and prose, but not the full files or large outputs that you see. Their job is to track the overall strategy and keep you on course. If they redirect you or question your assumptions, follow their guidance.
