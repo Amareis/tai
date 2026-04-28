@@ -232,7 +232,12 @@ impl LlmAgent {
                     if let Some(content) = res["choices"][0]["delta"]["reasoning_content"].as_str()
                         && !content.is_empty()
                     {
-                        thinks = true;
+                        if !thinks {
+                            thinks = true;
+                            if self.tui {
+                                println!("\n\nTHINKING\n");
+                            }
+                        }
                         if self.tui {
                             print!("{content}");
                         }
