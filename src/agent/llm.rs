@@ -393,12 +393,11 @@ fn build_task_messages(state: &State, resp: &AgentResponse) -> Vec<ChatCompletio
         let _ = writeln!(body, "## Commands sent by agent (results are NOT yet known)");
         for seg in &resp.segments {
             let action = match seg.mode {
-                BlockMode::Close => "close window".to_string(),
-                BlockMode::File => "view file".to_string(),
-                BlockMode::Write => format!("write file ({} chars)", seg.content.len()),
-                BlockMode::Edit(_) => "edit file".to_string(),
-                BlockMode::Task => "task".to_string(),
-                BlockMode::Ask | BlockMode::Exec | BlockMode::Watch | BlockMode::Delegate => seg.content.clone(),
+                BlockMode::Close | BlockMode::File | BlockMode::Edit(_) | BlockMode::Task => seg.window.clone(),
+                BlockMode::Write => format!("{} ({} chars)", seg.window, seg.content.len()),
+                BlockMode::Ask | BlockMode::Exec | BlockMode::Watch | BlockMode::Delegate => {
+                    format!("{} — {}", seg.window, seg.content)
+                }
             };
             let dash = if seg.dashboard { ".dashboard" } else { "" };
             let mode_str = format!("{}{}", seg.mode, dash);
