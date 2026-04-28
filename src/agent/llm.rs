@@ -87,24 +87,15 @@ impl Agent for LlmAgent {
 
         for attempt in 1..=MAX_RETRIES {
             let edit_violations = check_edit_violations(&resp.segments, &state.outputs);
-            let needs_task = resp.task.is_empty();
             let has_heredoc_violations = !resp.heredoc_violations.is_empty();
             let has_edit_violations =
                 !edit_violations.is_empty() || !resp.edit_parse_errors.is_empty();
 
-            if !needs_task && !has_heredoc_violations && !has_edit_violations {
+            if !has_heredoc_violations && !has_edit_violations {
                 break;
             }
 
             let mut complaint = String::new();
-            if needs_task {
-                complaint.push_str(
-                    "You forgot to include a `task` block. \
-                     You MUST reply with a ```task block containing your current status and plan for the next tick. \
-                     Include: Known, Resolved, Context, Do. \
-                     It will be APPENDED to your previous answer, so you don't need to duplicate all other commands.",
-                );
-            }
             if has_heredoc_violations {
                 complaint.push_str(
                     "Write and edit blocks MUST use heredoc syntax: \
@@ -178,20 +169,30 @@ impl Agent for LlmAgent {
 
         // Final validation after all retries
         let final_edit_violations = check_edit_violations(&resp.segments, &state.outputs);
-        let final_needs_task = resp.task.is_empty();
         let final_has_heredoc = !resp.heredoc_violations.is_empty();
         let final_has_edit =
             !final_edit_violations.is_empty() || !resp.edit_parse_errors.is_empty();
 
-        if final_needs_task || final_has_heredoc || final_has_edit {
+        if final_has_heredoc || final_has_edit {
             let mut all_violations: Vec<String> = Vec::new();
-            if final_needs_task {
-                all_violations.push("missing task block".into());
-            }
             all_violations.extend(resp.heredoc_violations);
             all_violations.extend(resp.edit_parse_errors);
             all_violations.extend(final_edit_violations);
             return Err(AgentError::InvalidResponse(all_violations));
+        }
+
+        if !resp.complete {
+            info!("llm step: generating task summary...");
+            let task_messages = build_task_messages(state, &resp);
+            match self.call_llm(&task_messages).await {
+                Ok((task_text, _)) => {
+                    info!("llm step: task summary generated ({} bytes)", task_text.len());
+                    resp.task = task_text.trim().to_string();
+                }
+                Err(e) => {
+                    warn!("failed to generate task summary: {e}");
+                }
+            }
         }
 
         Ok(resp)
@@ -360,6 +361,75 @@ fn render_window_summary(state: &State) -> String {
         ),
     ).ok();
     body
+}
+
+#[must_use]
+fn build_task_messages(state: &State, resp: &AgentResponse) -> Vec<ChatCompletionRequestMessage> {
+    let mut body = String::new();
+
+    if !state.outputs.is_empty() {
+        let _ = writeln!(body, "## Known results from previous ticks");
+        for (key, out) in &state.outputs {
+            let status = if out.exit_code == 0 { "OK" } else { "FAIL" };
+            let preview: String = out.stdout.chars().take(80).collect();
+            let _ = writeln!(
+                body,
+                "- {}: exit {} ({}, {} chars) — {}",
+                key, out.exit_code, status, out.stdout.len(), preview
+            );
+        }
+        let _ = writeln!(body);
+    }
+
+    if !state.task.is_empty() {
+        let _ = writeln!(body, "## Previous task (for context only)\n{}\n", state.task);
+    }
+
+    if !resp.reasoning.is_empty() {
+        let _ = writeln!(body, "## Agent reasoning this tick\n{}\n", resp.reasoning);
+    }
+
+    if !resp.segments.is_empty() {
+        let _ = writeln!(body, "## Commands sent by agent (results are NOT yet known)");
+        for seg in &resp.segments {
+            let action = match seg.mode {
+                BlockMode::Close => "close window".to_string(),
+                BlockMode::File => "view file".to_string(),
+                BlockMode::Write => format!("write file ({} chars)", seg.content.len()),
+                BlockMode::Edit(_) => "edit file".to_string(),
+                BlockMode::Task => "task".to_string(),
+                BlockMode::Ask | BlockMode::Exec | BlockMode::Watch | BlockMode::Delegate => seg.content.clone(),
+            };
+            let dash = if seg.dashboard { ".dashboard" } else { "" };
+            let mode_str = format!("{}{}", seg.mode, dash);
+            let _ = writeln!(body, "- {mode_str}: {action}");
+        }
+        let _ = writeln!(body);
+    }
+
+    let prompt = r#"The agent operates in ticks. Each tick looks like this:
+1. Agent wakes up with ZERO memory. It sees only the task note + current system state.
+2. Agent reasons and decides what to do.
+3. Agent sends commands (watch, exec, edit, write, file, etc.).
+4. Commands execute. Their results appear on the NEXT tick.
+5. You (the external summarizer) receive the agent's reasoning, the commands it just sent, and any KNOWN results from earlier ticks.
+
+Your job: write the task/status note that the agent will see at step 1 of the next tick.
+
+Rules:
+- Do NOT use first person ("I", "my", "I did"). Write as an external observer/task list.
+- Format: "Goal: [original goal from Previous task]. Done: ... Known: ... Next: ..." — the original goal MUST be preserved and restated at the start of every summary so the agent never loses sight of why it is working.
+- Commands the agent JUST sent have NOT executed yet. Their results are unknown.
+- Be specific about what was learned and decided, and what must be done next.
+- Do not compress to a short phrase. Write 5-15 sentences capturing the essential context.
+- If the original goal has been fully achieved, say so explicitly and set the next step to "Finish — use task:complete"."#;
+
+    let text = format!("{body}\n\n{prompt}");
+
+    vec![
+        ChatCompletionRequestSystemMessage::from("You are an external task summarizer for an AI agent. You are NOT the agent.").into(),
+        ChatCompletionRequestUserMessage::from(text).into(),
+    ]
 }
 
 #[cfg(test)]
