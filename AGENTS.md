@@ -7,28 +7,38 @@
 ### Запуск
 
 ```bash
-tai          # обычный запуск
-tai --tui    # с выводом логов и стриминга в консоль
+tai                          # обычный запуск
+tai --tui                   # с выводом логов и стриминга в консоль
+tai --debug                 # один тик и выход (debug-режим)
+tai --max-ticks 10          # ограничить число тиков
+tai --no-delegate           # отключить delegate-блоки
+tai ./some-dir              # открыть/создать сессию для указанной директории
 ```
 
 В проекте уже настроен `.env` с моделью и API-ключом — можно запускать смело, не перепроверяя конфигурацию.
 
-CLI (`src/main.rs`) через clap парсит команду `server`, читает `tai.md` как начальный ответ, парсит его через `parse_response()` и вызывает `run_server()` из `lib.rs`.
+CLI (`src/main.rs`) через clap парсит аргументы, читает `tai.md` как начальный ответ (или `src/session/default_tai.md`), парсит его через `parse_response()` и вызывает `run_server()` из `lib.rs`.
 
 ### Цикл тиков
 
 `Server` (`src/core/mod.rs`) крутит `loop`:
 
-1. **apply_segments_sorted** — берёт сегменты от предыдущего ответа агента, обновляет список `tracked`-команд (Close → Exec → View)
-2. **run_tracked** — выполняет команды:
-   - `View` — выполняется каждый тик (просмотр файлов, статусы)
-   - `Exec` — выполняется один раз, результат кешируется (запись файлов, установка пакетов)
-   - `Close` — убирает команду из отслеживаемых
-3. **build state** — `State` собирает: системный промпт + содержимое всех окон (Vec<TrackedView>) + предыдущий ответ агента
-4. **agent.step(&state)** — вызов LLM (streaming через async-openai)
-5. Сегменты ответа сохраняются как pending для следующего тика
+1. **`tick_tack`** — вызывает `apply_response` для предыдущего ответа агента, затем `agent.step(&state)`
+2. **`apply_response`** — обрабатывает сегменты ответа (в порядке: Close, Ask, Write, Edit, Exec, Delegate, File, Watch):
+   - `Close` — удаляет окно из `state.segments` и `state.outputs`
+   - `Ask` — задаёт вопрос пользователю в терминале, сохраняет ответ как output
+   - `Write` — записывает файл через heredoc, затем показывает его через `file`
+   - `Edit` — редактирует файл через `ex`-скрипты (с валидацией строк и без пересечений)
+   - `Exec` — выполняет команду один раз, результат кешируется в `outputs`
+   - `Delegate` — запускает подпроцесс `tai` для вложенной задачи
+   - `File` — показывает файл с нумерацией строк (через `backend.file()`)
+   - `Watch` — выполняется каждый тик (просмотр файлов, статусы)
+   - `Task` — обрабатывается на этапе парсинга: устанавливает `state.task` и флаг `complete`
+3. **`build state`** — `State` собирает: системный промпт + инструкции + сегменты (`Vec<ParsedBlock>`) + outputs (`HashMap<String, CmdOutput>`) + `tick_n` + `task`
+4. **`agent.step(&state)`** — вызов LLM (streaming через `async-openai`)
+5. **Persistence** — `SessionDir` сохраняет `index.md`, `tick`, `responses/{tick}.toml`, `out/{window}.out`, `steps/{tick}.md`
 
-**Выход:** когда `tracked` пуст (все окна закрыты).
+**Выход:** когда `response.complete == true` (или `state.is_completed`), или достигнут `max_ticks`, или включён `debug`, или получен Ctrl-C.
 
 ### Формат взаимодействия с моделью
 
@@ -36,10 +46,9 @@ CLI (`src/main.rs`) через clap парсит команду `server`, чит
 
 ```
 ## [window-title]
+L1:line one
+L2:line two
 exit 0
-```
-output here
-```
 ```
 
 И отвечает текстом с code blocks:
@@ -47,42 +56,72 @@ output here
 ```
 Some reasoning prose
 
-```window-title
-command to run
+```watch:build
+cargo build
 ```
 
-```another-title:exec
-one-shot command
+```exec:install
+cargo add serde
+```
+
+```file:src/main.rs
+```
+
+```write:readme.md
+<<'TAIDELIM'
+# Hello
+TAIDELIM
+```
+
+```edit:src/main.rs
+Exactly L10:old line
+<<'TAIDELIM'
+fn new() {}
+TAIDELIM
+```
+
+```ask:user
+What should I do next?
 ```
 
 ```old-window:close
 ```
+
+```task
+1. Check build
+2. Fix errors
+```
 ```
 
-Парсер (`src/response/mod.rs`) понимает heredoc-и внутри блоков — `<<'EOF'` защищает содержимое от ложных срабатываний на ` ``` `.
+Парсер (`src/response/mod.rs`) понимает heredoc-и внутри блоков — `<<'TAIDELIM'` защищает содержимое от ложных срабатываний на ` ``` `. `Write` и `Edit` блоки обязаны использовать heredoc. Есть `dashboard`-модификатор (например, `watch.dashboard:tree`).
 
 ## Структура проекта
 
 ```
 src/
-├── main.rs              # CLI: tai server [--debug]
+├── main.rs              # CLI: tai [--debug] [--tui] [--max-ticks N] [--no-delegate] [path]
 ├── lib.rs               # create_server(), run_server()
 ├── types.rs             # BlockMode, ParsedBlock
 ├── agent/
 │   ├── mod.rs           # Agent trait, AgentResponse, NopAgent, MockAgent, TestStep
-│   ├── llm.rs           # LlmAgent — async-openai streaming (поддержка reasoning_content)
+│   ├── llm.rs           # LlmAgent — async-openai streaming + retry с валидацией
 │   └── test_agent.rs    # TestAgent — пошаговая проверка для E2E тестов
 ├── backend/
 │   ├── mod.rs           # Backend trait, CmdOutput
 │   └── local.rs         # LocalBackend — bash -c через duct
 ├── core/
-│   └── mod.rs           # Server — tick loop, tracked commands, apply/execute
+│   └── mod.rs           # Server — tick loop, apply_response, persistence
+├── session/
+│   ├── mod.rs           # SessionDir — управление сессией и файлами на диске
+│   ├── system_prompt.txt
+│   ├── instructions.txt
+│   └── default_tai.md
 ├── state/
-│   ├── mod.rs           # State, TrackedView — сборка данных для промпта
-│   └── system_prompt.txt # Системный промпт для модели
+│   └── mod.rs           # State — сборка данных для промпта
 ├── response/
-│   └── mod.rs           # parse_response() — парсинг code blocks с поддержкой heredoc
-tests/
+│   ├── mod.rs           # parse_response(), serialize_blocks()
+│   └── edit_command.rs  # EditCommand, parse_edit_command(), валидация edit
+ tests/
 └── server_test.rs       # E2E тесты с TestAgent + LocalBackend
 ```
 
@@ -90,26 +129,28 @@ tests/
 
 | Тип | Где | Суть |
 |-----|-----|------|
-| `BlockMode` | `types.rs` | `View` / `Exec` / `Close` — режим окна |
-| `ParsedBlock` | `types.rs` | window, mode, content, prose (Option<String>) — один блок ответа |
-| `TrackedCmd` | `core/mod.rs` | Внутренний: title, command, rerun, cached_output/exit |
-| `TrackedView` | `state/mod.rs` | title, output, exit_code, rerun — для сборки состояния |
-| `State` | `state/mod.rs` | system + tracked[] + previous_response + tick_n |
-| `AgentResponse` | `agent/mod.rs` | reasoning + segments[] + outro (Option<String>) |
-| `CmdOutput` | `backend/mod.rs` | exit_code + stdout |
+| `BlockMode` | `types.rs` | `Watch` (`view`) / `Close` / `Exec` / `Ask` / `File` / `Edit(Option<EditCommand>)` / `Write` / `Task` / `Delegate` |
+| `ParsedBlock` | `types.rs` | `window`, `mode`, `content`, `prose`, `dashboard` — один блок ответа |
+| `State` | `state/mod.rs` | `system` + `instructions` + `segments[]` + `outputs` + `tick_n` + `task` + `is_completed` |
+| `AgentResponse` | `agent/mod.rs` | `reasoning` + `segments[]` + `task` + `complete` + `heredoc_violations` + `edit_parse_errors` |
+| `CmdOutput` | `backend/mod.rs` | `exit_code` + `stdout` |
+| `EditCommand` | `response/edit_command.rs` | `start`, `end`, `content`, `start_text`, `end_text` — для `ex`-скриптов |
+| `SessionDir` | `session/mod.rs` | Работа с `.session/`: `index.md`, `out/`, `responses/`, `tick`, `steps/` |
 
 ## Трейты
 
 - **`Agent`** (`agent/mod.rs`) — `async fn step(&self, state: &State) -> Result<AgentResponse, AgentError>`
   - Реализации: `LlmAgent`, `NopAgent`, `MockAgent`, `TestAgent`
+  - Ещё `fn as_any(&self) -> Option<&dyn Any>` (для `TestAgent` в тестах)
 - **`Backend`** (`backend/mod.rs`) — `async fn run(&self, title: &str, command: &str) -> CmdOutput`
+  - Дефолтный метод: `async fn file(&self, title: &str) -> CmdOutput` (через `awk` с нумерацией)
   - Реализация: `LocalBackend` (bash через duct)
 
 ## Зависимости
 
-Основные: `tokio`, `async-openai` (streaming + BYOT), `duct` (shell), `clap` (CLI), `tracing`, `serde`, `dotenvy`.
+Основные: `tokio`, `async-openai` (streaming + BYOT), `duct` (shell), `clap` (CLI), `tracing` + `tracing-subscriber`, `serde` + `serde_json`, `toml`, `uuid`, `async-trait`, `futures-util`, `thiserror`, `dotenv`.
 
-Clippy: pedantic, panic/indexing/unwrap — deny. Конфиг в `clippy.toml` — просто `cargo clippy`, без флагов.
+Clippy: pedantic, panic/indexing/unwrap/expect — deny. Конфиг в `Cargo.toml` (`[lints.clippy]`) и `clippy.toml` (разрешения для тестов). Просто `cargo clippy`, без флагов.
 
 ## Команды для проверки
 
