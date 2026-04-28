@@ -258,20 +258,31 @@ pub fn validate_no_overlaps(commands: &[EditCommand]) -> Result<(), EditError> {
 }
 
 pub fn validate_texts_against_output(cmd: &EditCommand, output: &str) -> Result<(), EditError> {
-    if !output.contains(&cmd.start_text) {
+    let lines: Vec<&str> = output.lines().collect();
+
+    let start_found = lines.iter().any(|line| *line == cmd.start_text);
+    if !start_found {
         return Err(EditError::Parse {
             line: 0,
-            message: format!("start text `{}` not found in file output", cmd.start_text),
+            message: format!(
+                "start text `{}` not found as exact line in file output",
+                cmd.start_text
+            ),
         });
     }
-    if let Some(text) = cmd.end_text.as_ref()
-        && !output.contains(text.as_str())
-    {
-        return Err(EditError::Parse {
-            line: 0,
-            message: format!("end text `{text}` not found in file output"),
-        });
+
+    if let Some(text) = cmd.end_text.as_ref() {
+        let end_found = lines.iter().any(|line| *line == text.as_str());
+        if !end_found {
+            return Err(EditError::Parse {
+                line: 0,
+                message: format!(
+                    "end text `{text}` not found as exact line in file output"
+                ),
+            });
+        }
     }
+
     Ok(())
 }
 
@@ -566,6 +577,56 @@ mod tests {
         let result = validate_texts_against_output(&cmd, output);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("missing end"));
+    }
+
+    #[test]
+    fn test_validate_texts_exact_match_ok() {
+        let cmd =
+            parse_edit_command("Exactly L2:line two\n<<'TAIDELIM'\nREPLACED\nTAIDELIM").unwrap();
+        let output = "L1:line one\nL2:line two\nL3:line three";
+        assert!(validate_texts_against_output(&cmd, output).is_ok());
+    }
+
+    #[test]
+    fn test_validate_texts_partial_match_fails() {
+        // start_text is a substring of the actual line but not the full line
+        let cmd = EditCommand {
+            start: LineRef::Num(2),
+            end: None,
+            content: "x".to_string(),
+            start_text: "L2:line".to_string(),
+            end_text: None,
+        };
+        let output = "L1:line one\nL2:line two\nL3:line three";
+        let result = validate_texts_against_output(&cmd, output);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("L2:line"));
+    }
+
+    #[test]
+    fn test_validate_texts_range_ok() {
+        let cmd = parse_edit_command(
+            "Start L1:line one\nEnd L3:line three\n<<'TAIDELIM'\nnew\nTAIDELIM",
+        )
+        .unwrap();
+        let output = "L1:line one\nL2:line two\nL3:line three";
+        assert!(validate_texts_against_output(&cmd, output).is_ok());
+    }
+
+    #[test]
+    fn test_validate_texts_wrong_line_number_fails() {
+        // L2 has different text than what start_text claims
+        let cmd = EditCommand {
+            start: LineRef::Num(2),
+            end: None,
+            content: "x".to_string(),
+            start_text: "L2:line two".to_string(),
+            end_text: None,
+        };
+        let output = "L1:line one\nL2:something else\nL3:line three";
+        let result = validate_texts_against_output(&cmd, output);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("L2:line two"));
     }
 
     #[test]
