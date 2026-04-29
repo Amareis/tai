@@ -355,7 +355,7 @@ impl Server {
                 .join("delegates")
                 .join(&block.window);
             let mut cmd = format!(
-                "{} --session {}",
+                "{} {}",
                 shell_escape(&exe.to_string_lossy()),
                 shell_escape(&child_path.to_string_lossy()),
             );

@@ -30,10 +30,7 @@ fn check_edit_violations(
     for block in segments {
         if let BlockMode::Edit(ref cmd_opt) = block.mode {
             if cmd_opt.is_none() {
-                violations.push(format!(
-                    "edit:{} — edit command not parsed.",
-                    block.window
-                ));
+                violations.push(format!("edit:{} — edit command not parsed.", block.window));
                 continue;
             }
             let Some(output) = outputs.get(&block.window) else {
@@ -58,7 +55,11 @@ impl LlmAgent {
     pub fn new(model: String) -> Self {
         Self {
             model,
-            client: Client::default(),
+            client: Client::with_config(
+                OpenAIConfig::default()
+                    .with_header("User-Agent", "Kilo-Code/4.110.0")
+                    .unwrap_or_else(|_| OpenAIConfig::default()),
+            ),
             tui: false,
         }
     }
@@ -186,7 +187,10 @@ impl Agent for LlmAgent {
             let task_messages = build_task_messages(state, &resp);
             match self.call_llm(&task_messages).await {
                 Ok((task_text, _)) => {
-                    info!("llm step: task summary generated ({} bytes)", task_text.len());
+                    info!(
+                        "llm step: task summary generated ({} bytes)",
+                        task_text.len()
+                    );
                     resp.task = task_text.trim().to_string();
                 }
                 Err(e) => {
@@ -283,8 +287,7 @@ fn state_to_messages(state: &State) -> Vec<ChatCompletionRequestMessage> {
     let mut ms: Vec<ChatCompletionRequestMessage> =
         vec![ChatCompletionRequestSystemMessage::from(state.system.clone()).into()];
 
-    let (regular, dashboard): (Vec<_>, Vec<_>) =
-        state.segments.iter().partition(|s| !s.dashboard);
+    let (regular, dashboard): (Vec<_>, Vec<_>) = state.segments.iter().partition(|s| !s.dashboard);
 
     for segment in regular {
         let agent_text = crate::response::serialize_blocks(std::slice::from_ref(segment));
@@ -354,7 +357,8 @@ fn render_window_summary(state: &State) -> String {
             Write::write_fmt(
                 &mut body,
                 format_args!("{}: ~{} tok ({})\n", segment.window, tokens, tag),
-            ).ok();
+            )
+            .ok();
         }
     }
 
@@ -364,7 +368,8 @@ fn render_window_summary(state: &State) -> String {
             "\n== Context: ~{total_tokens} tokens | Tick #{} ==",
             state.tick_n
         ),
-    ).ok();
+    )
+    .ok();
     body
 }
 
@@ -380,18 +385,30 @@ fn build_task_messages(state: &State, resp: &AgentResponse) -> Vec<ChatCompletio
             let _ = writeln!(
                 context,
                 "- {}: exit {} ({}, {} chars) — {}",
-                key, out.exit_code, status, out.stdout.len(), preview
+                key,
+                out.exit_code,
+                status,
+                out.stdout.len(),
+                preview
             );
         }
         let _ = writeln!(context);
     }
 
     if !state.task.is_empty() {
-        let _ = writeln!(context, "## Previous task (for context only)\n{}\n", state.task);
+        let _ = writeln!(
+            context,
+            "## Previous task (for context only)\n{}\n",
+            state.task
+        );
     }
 
     if !resp.reasoning.is_empty() {
-        let _ = writeln!(context, "## Agent reasoning this tick\n{}\n", resp.reasoning);
+        let _ = writeln!(
+            context,
+            "## Agent reasoning this tick\n{}\n",
+            resp.reasoning
+        );
     }
 
     if !resp.segments.is_empty() {
@@ -484,7 +501,10 @@ mod tests {
 
     #[test]
     fn test_check_edit_violations_ok() {
-        let cmd = edit_command::parse_edit_command("Exactly L2:line two\n<<'TAIDELIM'\nREPLACED\nTAIDELIM").unwrap();
+        let cmd = edit_command::parse_edit_command(
+            "Exactly L2:line two\n<<'TAIDELIM'\nREPLACED\nTAIDELIM",
+        )
+        .unwrap();
         let segments = vec![ParsedBlock {
             window: "main.rs".into(),
             mode: BlockMode::Edit(Some(cmd)),
@@ -505,7 +525,10 @@ mod tests {
 
     #[test]
     fn test_check_edit_violations_text_mismatch() {
-        let cmd = edit_command::parse_edit_command("Exactly L2:wrong line\n<<'TAIDELIM'\nREPLACED\nTAIDELIM").unwrap();
+        let cmd = edit_command::parse_edit_command(
+            "Exactly L2:wrong line\n<<'TAIDELIM'\nREPLACED\nTAIDELIM",
+        )
+        .unwrap();
         let segments = vec![ParsedBlock {
             window: "main.rs".into(),
             mode: BlockMode::Edit(Some(cmd)),

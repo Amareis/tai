@@ -12,12 +12,13 @@ tai --tui                   # с выводом логов и стриминга
 tai --debug                 # один тик и выход (debug-режим)
 tai --max-ticks 10          # ограничить число тиков
 tai --no-delegate           # отключить delegate-блоки
+tai --task "описание"       # задать начальную задачу
 tai ./some-dir              # открыть/создать сессию для указанной директории
 ```
 
 В проекте уже настроен `.env` с моделью и API-ключом — можно запускать смело, не перепроверяя конфигурацию.
 
-CLI (`src/main.rs`) через clap парсит аргументы, читает `tai.md` как начальный ответ (или `src/session/default_tai.md`), парсит его через `parse_response()` и вызывает `run_server()` из `lib.rs`.
+CLI (`src/main.rs`) через clap парсит аргументы и вызывает `run_server()` из `lib.rs`. Чтение `tai.md` как начального ответа (или `src/session/default_tai.md`) выполняется в `SessionDir::init_session`, результат парсится через `parse_response()`.
 
 ### Цикл тиков
 
@@ -31,10 +32,10 @@ CLI (`src/main.rs`) через clap парсит аргументы, читае�
    - `Edit` — редактирует файл через `ex`-скрипты (с валидацией строк и без пересечений)
    - `Exec` — выполняет команду один раз, результат кешируется в `outputs`
    - `Delegate` — запускает подпроцесс `tai` для вложенной задачи
-   - `File` — показывает файл с нумерацией строк (через `backend.file()`)
+   - `File` — показывает файл с нумерацией строк (через `backend.file()`); выполняется каждый тик, как Watch
    - `Watch` — выполняется каждый тик (просмотр файлов, статусы)
    - `Task` — обрабатывается на этапе парсинга: устанавливает `state.task` и флаг `complete`
-3. **`build state`** — `State` собирает: системный промпт + инструкции + сегменты (`Vec<ParsedBlock>`) + outputs (`HashMap<String, CmdOutput>`) + `tick_n` + `task`
+3. **`build state`** — `State` собирает: системный промпт + инструкции + сегменты (`Vec<ParsedBlock>`) + outputs (`HashMap<String, CmdOutput>`) + `tick_n` + `task` + `is_completed`
 4. **`agent.step(&state)`** — вызов LLM (streaming через `async-openai`)
 5. **Persistence** — `SessionDir` сохраняет `index.md`, `tick`, `responses/{tick}.toml`, `out/{window}.out`, `steps/{tick}.md`
 
@@ -84,7 +85,7 @@ TAIDELIM
 What should I do next?
 ```
 
-```old-window:close
+```close:old-window
 ```
 
 ```task
