@@ -47,7 +47,7 @@ cargo add serde
 | **close** | `` ```close:title\n``` `` | Close the named window. |
 | **exec** | `` ```exec:title\ncommand\n``` `` | Run command once. Output is cached. Use for one-shot actions. |
 | **ask** | `` ```ask:title\nquestion\n``` `` | Ask the user a question. Answer is cached. |
-| **edit** | `` ```edit:path\n<<'TAIDELIM'\ncommands\TAIDELIM\n``` `` | Edit a file using structured line commands. **Must use heredoc.** See "Editing Files". |
+| **edit** | `` ```edit:path\n<<'DELIM'\nsearch\nDELIM\n<<'DELIM'\nreplace\nDELIM\n``` `` | Edit a file via search/replace with two heredocs. **Must use heredoc.** See "Editing Files". |
 | **write** | `` ```write:path\n<<'TAIDELIM'\ncontent\TAIDELIM\n``` `` | Overwrite a file with new content. **Must use heredoc.** See "Writing Files". |
 
 ### Ending the Session
@@ -98,94 +98,60 @@ The content goes between `<<'TAIDELIM'` and `TAIDELIM`. This is **mandatory** �
 
 ## Editing Files
 
-Each edit block contains **exactly one** command: replace a line (or range) with content from a heredoc. There are no separate actions — everything is a replace.
+Edit blocks use **search/replace** via two heredocs. The first heredoc contains the **search text** (exact text from the file), the second contains the **replacement text**. Delimiter names don't matter — only order matters.
 
-- **Replace** — heredoc contains the new content
-- **Delete** — heredoc is empty (`<<'TAIDELIM'` immediately followed by `TAIDELIM`)
-- **Insert before** — select the line, use a single-line range, and put the new content **before** the original line inside the heredoc
-- **Append after** — select the line, use a single-line range, and put the new content **after** the original line inside the heredoc
-
-### Line references
-
-- `L<n>:text` — line *n* with content *text*
-- `L<n>;` — line *n* is empty (blank line)
-
-### Command format
-
-**Single line:**
 ```
-edit:work/some/file
-Exactly L<n>:line text
-<<'TAIDELIM'
-[content lines]
-TAIDELIM
+edit:work/src/main.rs
+<<'SEARCH'
+    todo!("fetch data")
+SEARCH
+<<'REPLACE'
+    let data = fetch_data();
+    let result = process(data);
+    println!("{result}");
+REPLACE
 ```
 
-**Range:**
-```
-edit:work/example
-Start L<n>:start line text
-End L<m>:end line text
-<<'TAIDELIM'
-[content lines]
-TAIDELIM
-```
-
-- **One command per block** — for multiple edits, send multiple `edit` blocks
-- Commands are automatically sorted **bottom-to-top** before execution, so you can write them in any order without worrying about line number shifts from earlier edits
+- **Replace** — second heredoc contains new content
+- **Delete** — second heredoc is empty (`<<'DELIM'` immediately followed by `DELIM`)
+- **One edit per block** — for multiple edits, send multiple `edit` blocks
+- **Search must be unique** — the search text must appear exactly once in the file. If it appears multiple times, expand the search to include more surrounding lines so it becomes unique.
+- **No line numbers** — use exact text from the file, not line numbers
 
 ### Examples
 
 Replace a single line:
 ```
 edit:work/src/main.rs
-Exactly L5:    todo!("fetch data")
-<<'TAIDELIM'
+<<'A'
+    todo!("fetch data")
+A
+<<'B'
     let data = fetch_data();
-    let result = process(data);
-    println!("{result}");
-TAIDELIM
+B
 ```
 
-Replace a range that ends with an empty line:
+Replace multiple lines:
 ```
 edit:work/src/main.rs
-Start L1:use some::mod;
-End L2;
-<<'TAIDELIM'
+<<'A'
+use some::mod;
+use some::other;
+A
+<<'B'
 use some::mod::{self, SomeImport};
 use some::new::mod;
-
-TAIDELIM
+B
 ```
 
-Delete a line (empty heredoc):
+Delete lines (empty second heredoc):
 ```
 edit:work/src/main.rs
-Exactly L10:    unused_call();
-<<'TAIDELIM'
-TAIDELIM
-```
-
-Insert before a line (include original line at the **end** of heredoc):
-```
-edit:work/src/main.rs
-Exactly L5:pub fn main() {
-<<'TAIDELIM'
-    some_helper();
-
-pub fn main() {
-TAIDELIM
-```
-
-Append after a line (include original line at the **start** of heredoc):
-```
-edit:work/src/main.rs
-Exactly L5:pub fn main() {
-<<'TAIDELIM'
-pub fn main() {
-    some_helper();
-TAIDELIM
+<<'A'
+    unused_call();
+A
+<<'B'
+B
 ```
 
 ### Rules

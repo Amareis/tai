@@ -176,11 +176,14 @@ mod tests {
         let resp = AgentResponse::block(
             "src/main.rs",
             BlockMode::Edit(None),
-            "Exactly L1:old text\n<<'TAIDELIM'\nnew text\nTAIDELIM",
+            "<<'SEARCH'\nold text\nSEARCH\n<<'REPLACE'\nnew text\nREPLACE",
         );
         assert_eq!(resp.segments.len(), 1);
         if let BlockMode::Edit(ref cmd_opt) = resp.segments[0].mode {
             assert!(cmd_opt.is_some(), "edit command should be parsed from content");
+            let cmd = cmd_opt.as_ref().unwrap();
+            assert_eq!(cmd.search, "old text");
+            assert_eq!(cmd.replace, "new text");
         } else {
             panic!("expected Edit mode");
         }

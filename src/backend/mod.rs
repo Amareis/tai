@@ -8,14 +8,11 @@ pub struct CmdOutput {
     pub stdout: String,
 }
 
-// const AWK: &str = r#"'{ if ($0 ~ /^[[:space:]]*$/) print "L" NR ";"; else print "L" NR ":" $0 }'"#;
-const AWK: &str = r#"'{ if ($0 ~ /^[[:space:]]*$/) print "L" NR ":<|EMPTY|>"; else print "L" NR ":" $0 }'"#;
-
 #[async_trait]
 pub trait Backend: Send + Sync {
     async fn run(&self, title: &str, command: &str) -> CmdOutput;
 
     async fn file(&self, title: &str) -> CmdOutput {
-        self.run(title, &format!(r#"awk {AWK} "{title}""#)).await
+        self.run(title, &format!(r#"cat "{title}""#)).await
     }
 }

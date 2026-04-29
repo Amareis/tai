@@ -41,7 +41,7 @@ fn check_edit_violations(
                 continue;
             };
             if let Some(cmd) = cmd_opt.as_ref()
-                && let Err(e) = edit_command::validate_texts_against_output(cmd, &output.stdout)
+                && let Err(e) = edit_command::validate_search_unique(cmd, &output.stdout)
             {
                 violations.push(format!("edit:{} — {e}", block.window));
             }
@@ -467,9 +467,7 @@ Rules:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::CmdOutput;
     use crate::types::{BlockMode, ParsedBlock};
-    use std::collections::HashMap;
 
     #[test]
     fn test_check_edit_violations_no_edit_blocks() {
@@ -480,7 +478,7 @@ mod tests {
             prose: None,
             dashboard: false,
         }];
-        let outputs = HashMap::new();
+        let outputs = std::collections::HashMap::new();
         assert!(check_edit_violations(&segments, &outputs).is_empty());
     }
 
@@ -493,7 +491,7 @@ mod tests {
             prose: None,
             dashboard: false,
         }];
-        let outputs = HashMap::new();
+        let outputs = std::collections::HashMap::new();
         let violations = check_edit_violations(&segments, &outputs);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("edit command not parsed"));
@@ -502,7 +500,7 @@ mod tests {
     #[test]
     fn test_check_edit_violations_ok() {
         let cmd = edit_command::parse_edit_command(
-            "Exactly L2:line two\n<<'TAIDELIM'\nREPLACED\nTAIDELIM",
+            "<<'SEARCH'\nline two\nSEARCH\n<<'REPLACE'\nREPLACED\nREPLACE",
         )
         .unwrap();
         let segments = vec![ParsedBlock {
@@ -512,12 +510,12 @@ mod tests {
             prose: None,
             dashboard: false,
         }];
-        let mut outputs = HashMap::new();
+        let mut outputs = std::collections::HashMap::new();
         outputs.insert(
             "main.rs".into(),
-            CmdOutput {
+            crate::backend::CmdOutput {
                 exit_code: 0,
-                stdout: "L1:line one\nL2:line two\nL3:line three\n".into(),
+                stdout: "line one\nline two\nline three\n".into(),
             },
         );
         assert!(check_edit_violations(&segments, &outputs).is_empty());
@@ -526,7 +524,7 @@ mod tests {
     #[test]
     fn test_check_edit_violations_text_mismatch() {
         let cmd = edit_command::parse_edit_command(
-            "Exactly L2:wrong line\n<<'TAIDELIM'\nREPLACED\nTAIDELIM",
+            "<<'SEARCH'\nwrong line\nSEARCH\n<<'REPLACE'\nREPLACED\nREPLACE",
         )
         .unwrap();
         let segments = vec![ParsedBlock {
@@ -536,12 +534,12 @@ mod tests {
             prose: None,
             dashboard: false,
         }];
-        let mut outputs = HashMap::new();
+        let mut outputs = std::collections::HashMap::new();
         outputs.insert(
             "main.rs".into(),
-            CmdOutput {
+            crate::backend::CmdOutput {
                 exit_code: 0,
-                stdout: "L1:line one\nL2:line two\nL3:line three\n".into(),
+                stdout: "line one\nline two\nline three\n".into(),
             },
         );
         let violations = check_edit_violations(&segments, &outputs);

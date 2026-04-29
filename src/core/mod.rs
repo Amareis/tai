@@ -256,8 +256,6 @@ impl Server {
         }
 
         for (path, blocks) in &edit_groups {
-            let prev_output = outputs.get(path).cloned();
-
             let mut all_commands = Vec::new();
             let mut edit_err: Option<edit_command::EditError> = None;
 
@@ -272,13 +270,6 @@ impl Server {
                             break;
                         }
                         Some(cmd) => {
-                            if let Some(ref out) = prev_output
-                                && let Err(e) =
-                                    edit_command::validate_texts_against_output(cmd, &out.stdout)
-                            {
-                                edit_err = Some(e);
-                                break;
-                            }
                             all_commands.push(cmd.clone());
                         }
                     }
@@ -299,7 +290,32 @@ impl Server {
                 continue;
             }
 
-            if let Err(e) = edit_command::validate_no_overlaps(&all_commands) {
+            let prev_output = outputs.get(path).cloned();
+
+            let mut edit_data = Vec::new();
+            let mut ranges = Vec::new();
+            for cmd in &all_commands {
+                if let Some(ref out) = prev_output {
+                    match edit_command::validate_search_unique(cmd, &out.stdout) {
+                        Ok(pos) => {
+                            ranges.push((pos, pos + cmd.search.len()));
+                            edit_data.push((pos, cmd.search.as_str(), cmd.replace.as_str()));
+                        }
+                        Err(e) => {
+                            edit_err = Some(e);
+                            break;
+                        }
+                    }
+                } else {
+                    edit_err = Some(edit_command::EditError::Parse {
+                        line: 0,
+                        message: format!("no file output available for {path}"),
+                    });
+                    break;
+                }
+            }
+
+            if let Some(e) = edit_err {
                 warn!("edit error for {path}: {e}");
                 let output = crate::backend::CmdOutput {
                     exit_code: 1,
@@ -309,11 +325,28 @@ impl Server {
                 continue;
             }
 
-            edit_command::sort_bottom_up(&mut all_commands);
-            let script = edit_command::build_ex_script(path, &all_commands);
-            debug!("execute: '{}' edit script: {}", path, script);
+            if let Err(e) = edit_command::validate_no_overlaps(&ranges) {
+                warn!("edit error for {path}: {e}");
+                let output = crate::backend::CmdOutput {
+                    exit_code: 1,
+                    stdout: format!("edit error: {e}"),
+                };
+                outputs.insert(path.clone(), output);
+                continue;
+            }
 
-            let _output = self.back.run(path, &script).await;
+            let file_content = prev_output.as_ref().map(|o| o.stdout.clone()).unwrap_or_default();
+            let new_content = edit_command::apply_edits(&file_content, &edit_data);
+            let abs_path = self.session.workspace().join(path);
+            if let Err(e) = tokio::fs::write(&abs_path, new_content).await {
+                warn!("edit error for {path}: failed to write file: {e}");
+                let output = crate::backend::CmdOutput {
+                    exit_code: 1,
+                    stdout: format!("edit error: failed to write file: {e}"),
+                };
+                outputs.insert(path.clone(), output);
+                continue;
+            }
 
             let file_view = self.back.file(path).await;
             outputs.insert(path.clone(), file_view);

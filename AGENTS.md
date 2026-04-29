@@ -75,10 +75,12 @@ TAIDELIM
 ```
 
 ```edit:src/main.rs
-Exactly L10:old line
-<<'TAIDELIM'
+<<'SEARCH'
+old line
+SEARCH
+<<'REPLACE'
 fn new() {}
-TAIDELIM
+REPLACE
 ```
 
 ```ask:user
@@ -135,7 +137,7 @@ src/
 | `State` | `state/mod.rs` | `system` + `instructions` + `segments[]` + `outputs` + `tick_n` + `task` + `is_completed` |
 | `AgentResponse` | `agent/mod.rs` | `reasoning` + `segments[]` + `task` + `complete` + `heredoc_violations` + `edit_parse_errors` |
 | `CmdOutput` | `backend/mod.rs` | `exit_code` + `stdout` |
-| `EditCommand` | `response/edit_command.rs` | `start`, `end`, `content`, `start_text`, `end_text` — для `ex`-скриптов |
+| `EditCommand` | `response/edit_command.rs` | `search`, `replace` — search/replace через два heredoc |
 | `SessionDir` | `session/mod.rs` | Работа с `.session/`: `index.md`, `out/`, `responses/`, `tick`, `steps/` |
 
 ## Трейты

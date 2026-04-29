@@ -631,13 +631,20 @@ file:src/main.rs\n```";
     #[test]
     fn test_edit_block() {
         let text = "```
-edit:src/main.rs\nExactly L10:old start\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM\n```";
+edit:src/main.rs
+<<'SEARCH'
+old start
+SEARCH
+<<'REPLACE'
+fn new() {}
+REPLACE
+```";
         let segments = parse_response_segments(text);
         assert_eq!(segments.len(), 1);
         assert!(matches!(
             &segments[0],
             ParsedSegment::Block { window, mode, content, .. }
-            if window == "src/main.rs" && matches!(mode, BlockMode::Edit(_)) && content.contains("Exactly")
+            if window == "src/main.rs" && matches!(mode, BlockMode::Edit(_)) && content.contains("SEARCH")
         ));
     }
 
@@ -698,7 +705,7 @@ write:src/main.rs\nfn main() {}\n```";
             ParsedBlock {
                 window: "src/lib.rs".into(),
                 mode: BlockMode::Edit(None),
-                content: "Start L10:old start\nEnd L15:old end\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM".into(),
+                content: "<<'SEARCH'\nold start\nold end\nSEARCH\n<<'REPLACE'\nfn new() {}\nREPLACE".into(),
                 prose: None,
                 dashboard: false,
             },
@@ -919,10 +926,14 @@ task:complete\nDone refactoring.\n```";
 
     #[test]
     fn test_serialize_edit_uses_heredoc() {
+        let cmd = crate::response::edit_command::EditCommand {
+            search: "old line".into(),
+            replace: "fn new() {}".into(),
+        };
         let block = ParsedBlock {
             window: "src/main.rs".into(),
-            mode: BlockMode::Edit(None),
-            content: "Exactly L10:old line\n<<'TAIDELIM'\nfn new() {}\nTAIDELIM".into(),
+            mode: BlockMode::Edit(Some(cmd)),
+            content: String::new(),
             prose: None,
             dashboard: false,
         };
